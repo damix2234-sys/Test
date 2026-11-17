@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Kroniki Wrzosu</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
+html,body{margin:0;height:100%;overflow:hidden;background:#000;font-family:Georgia,'Times New Roman',serif;color:#f3e9d2;touch-action:none}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block}
+#touch{position:fixed;inset:0;z-index:1}
+.hud{position:fixed;z-index:5;pointer-events:none}
+#hudTL{left:calc(12px + env(safe-area-inset-left));top:10px;width:230px}
+.bar{height:14px;background:rgba(0,0,0,.55);border:2px solid #5b4630;border-radius:8px;overflow:hidden;margin-bottom:5px;position:relative}
+.bar>i{display:block;height:100%;width:100%;transition:width .15s}
+#hpBar>i{background:linear-gradient(#e0504a,#9a1f1a)}
+#mpBar>i{background:linear-gradient(#5a9ae8,#1f4a9a)}
+.bar>span{position:absolute;inset:0;font-size:10px;line-height:11px;text-align:center;color:#fff;text-shadow:0 1px 2px #000}
+#stats{font-size:13px;text-shadow:0 1px 3px #000;display:flex;gap:10px;flex-wrap:wrap}
+#titleTxt{font-size:12px;font-style:italic;color:#e8d29a;text-shadow:0 1px 3px #000;margin-top:2px}
+#morality{height:6px;width:150px;margin-top:4px;border-radius:3px;background:linear-gradient(90deg,#8a1010,#555 50%,#f0d060);position:relative}
+#morality>b{position:absolute;top:-3px;width:4px;height:12px;background:#fff;border-radius:2px;box-shadow:0 0 4px #000}
+#questTrack{margin-top:8px;font-size:12px;background:rgba(20,14,8,.55);border-left:3px solid #c9a030;padding:5px 8px;border-radius:0 6px 6px 0;text-shadow:0 1px 2px #000;max-width:260px}
+#questTrack b{color:#f0d060;display:block;font-size:12px}
+#hudTR{right:calc(12px + env(safe-area-inset-right));top:10px;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+#clock{font-size:12px;text-shadow:0 1px 3px #000}
+#mini{width:118px;height:118px;border-radius:50%;border:3px solid #5b4630;box-shadow:0 0 8px #000;background:#223}
+#menuBtn,.rbtn{pointer-events:auto}
+#menuBtn{position:fixed;z-index:6;top:10px;right:calc(140px + env(safe-area-inset-right));width:44px;height:44px;border-radius:10px;background:rgba(40,28,16,.75);border:2px solid #8a6a3a;color:#f3e9d2;font-size:22px}
+#target{left:50%;top:12px;transform:translateX(-50%);width:min(260px,30vw);text-align:center;display:none}
+#target .n{font-size:13px;text-shadow:0 1px 3px #000;margin-bottom:2px}
+#target .bar{height:12px}
+#target .bar>i{background:linear-gradient(#d0a040,#8a5010)}
+#target.boss{width:min(420px,44vw)}
+#target.boss .bar{height:18px}
+#target.boss .bar>i{background:linear-gradient(#ff6a2a,#8a1a00)}
+#toast{left:50%;top:58px;transform:translateX(-50%);text-align:center;width:min(480px,50vw)}
+#toast div{display:inline-block;margin:3px auto;padding:7px 16px;background:rgba(20,14,8,.8);border:1px solid #8a6a3a;border-radius:8px;font-size:15px;animation:tin .3s}
+#toast div.q{border-color:#f0d060;color:#f8e8a8}
+#toast div.g{border-color:#8af;color:#cdf}
+#toast div.e{border-color:#f55;color:#fbb}
+@keyframes tin{from{opacity:0;transform:translateY(-10px)}to{opacity:1}}
+.rbtn{position:fixed;z-index:4;border-radius:50%;background:rgba(30,22,14,.55);border:3px solid rgba(220,190,130,.75);color:#fff;display:flex;align-items:center;justify-content:center;font-size:26px;text-shadow:0 1px 3px #000;touch-action:none}
+.rbtn.on{background:rgba(200,160,80,.6);transform:scale(.94)}
+.rbtn small{position:absolute;bottom:-17px;font-size:10px;white-space:nowrap;color:#eadbb8}
+#bAtk{right:calc(26px + env(safe-area-inset-right));bottom:28px;width:96px;height:96px;font-size:38px}
+#bMag{right:calc(140px + env(safe-area-inset-right));bottom:24px;width:66px;height:66px}
+#bRoll{right:calc(34px + env(safe-area-inset-right));bottom:150px;width:66px;height:66px}
+#bPot{right:calc(128px + env(safe-area-inset-right));bottom:118px;width:54px;height:54px;font-size:22px}
+#bPot b{position:absolute;top:-4px;right:-4px;font-size:11px;background:#7a1a1a;border-radius:9px;padding:1px 5px}
+#bUse{right:calc(190px + env(safe-area-inset-right));bottom:190px;width:auto;height:46px;border-radius:23px;padding:0 18px;font-size:15px;display:none;background:rgba(160,120,40,.8);border-color:#f0d060}
+#mpCost{position:absolute;width:100%;height:100%;border-radius:50%;background:rgba(0,0,0,.5);display:none}
+#joy{position:fixed;z-index:3;width:130px;height:130px;margin:-65px 0 0 -65px;border-radius:50%;border:3px solid rgba(255,255,255,.35);background:rgba(0,0,0,.18);pointer-events:none;left:110px;top:calc(100% - 110px);opacity:.5}
+#knob{position:absolute;left:50%;top:50%;width:56px;height:56px;margin:-28px 0 0 -28px;border-radius:50%;background:rgba(240,220,170,.6);border:2px solid rgba(255,255,255,.6)}
+#hurt{position:fixed;inset:0;z-index:2;pointer-events:none;box-shadow:inset 0 0 120px 40px rgba(200,0,0,.8);opacity:0}
+#fade{position:fixed;inset:0;z-index:30;background:#000;opacity:0;pointer-events:none;transition:opacity .8s}
+#floats{position:fixed;inset:0;z-index:4;pointer-events:none;overflow:hidden}
+.ft{position:absolute;left:0;top:0;font-weight:bold;font-size:18px;text-shadow:0 2px 3px #000,0 0 2px #000;white-space:nowrap;will-change:transform}
+.ft.dmg{color:#fff}.ft.crit{color:#ffd040;font-size:24px}.ft.hurt{color:#ff6060}.ft.gold{color:#ffd860;font-size:15px}.ft.xp{color:#9ef;font-size:15px}.ft.heal{color:#7f7}
+.ft.bubble{font-weight:normal;font-size:13px;background:rgba(250,240,220,.92);color:#3a2a1a;padding:4px 9px;border-radius:10px;text-shadow:none}
+.panel{position:fixed;z-index:20;background:linear-gradient(#2d2116,#1c140c);border:2px solid #8a6a3a;border-radius:12px;box-shadow:0 6px 30px #000;display:none}
+#dialog{left:50%;bottom:16px;transform:translateX(-50%);width:min(760px,94vw);padding:14px 18px;max-height:70vh;overflow-y:auto}
+#dName{color:#f0d060;font-size:17px;margin-bottom:6px}
+#dText{font-size:15px;line-height:1.45;margin-bottom:10px}
+#dOpts{display:flex;flex-wrap:wrap;gap:8px}
+.btn{pointer-events:auto;background:linear-gradient(#5a4224,#3a2a16);border:1px solid #c9a060;color:#f6ead0;border-radius:8px;padding:9px 14px;font-family:inherit;font-size:14px;cursor:pointer}
+.btn:active{background:#7a5a30}
+.btn.good{border-color:#f0e080;background:linear-gradient(#5a5a2a,#3a3a16)}
+.btn.evil{border-color:#e05050;background:linear-gradient(#5a2222,#381212)}
+.btn[disabled]{opacity:.45}
+#menu{inset:4vh 4vw;padding:12px 16px;display:none;flex-direction:column}
+#menu .tabs{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+#menu .tabs .btn.sel{background:#8a6a30}
+#mBody{flex:1;overflow-y:auto;font-size:14px;line-height:1.5}
+#mBody h3{color:#f0d060;margin:8px 0 4px;font-size:16px}
+.qitem{padding:8px;border:1px solid #5b4630;border-radius:8px;margin-bottom:6px;background:rgba(0,0,0,.25)}
+.qitem.tr{border-color:#f0d060}
+.qitem.done{opacity:.55}
+.stat{display:flex;align-items:center;gap:10px;padding:8px;border:1px solid #5b4630;border-radius:8px;margin-bottom:6px}
+.stat .pips{letter-spacing:2px;color:#f0d060}
+.stat .d{flex:1;font-size:12px;opacity:.85}
+#closeMenu{position:absolute;right:10px;top:8px}
+.overlay{position:fixed;inset:0;z-index:25;display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center;background:radial-gradient(rgba(0,0,0,.4),rgba(0,0,0,.85));padding:20px}
+.overlay h1{font-size:clamp(30px,7vw,64px);margin:0 0 8px;color:#f0d060;text-shadow:0 3px 12px #000;letter-spacing:2px}
+.overlay p{max-width:640px;font-size:15px;line-height:1.5}
+#start{display:flex;background:radial-gradient(rgba(0,0,0,.1),rgba(0,0,0,.7))}
+#start .sub{font-style:italic;color:#e8dcc0;margin-bottom:18px}
+#start .btn{font-size:18px;padding:12px 30px;margin:6px;min-width:220px}
+#err{position:fixed;inset:0;z-index:99;display:none;background:#200;color:#fff;padding:30px;font-family:sans-serif}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="touch"></div>
+<div id="hurt"></div>
+<div id="floats"></div>
+
+<div class="hud" id="hudTL">
+  <div class="bar" id="hpBar"><i></i><span></span></div>
+  <div class="bar" id="mpBar"><i></i><span></span></div>
+  <div id="stats"><span id="sGold">💰 0</span><span id="sXp">✨ 0</span><span id="sRen">⭐ 0</span></div>
+  <div id="titleTxt"></div>
+  <div id="morality"><b></b></div>
+  <div id="questTrack"></div>
+</div>
+<div class="hud" id="hudTR">
+  <div id="clock"></div>
+  <canvas id="mini" width="236" height="236"></canvas>
+</div>
+<button id="menuBtn">☰</button>
+<div class="hud" id="target"><div class="n"></div><div class="bar"><i></i></div></div>
+<div class="hud" id="toast"></div>
+
+<div id="joy"><div id="knob"></div></div>
+<div class="rbtn" id="bAtk">⚔<small>Atak</small></div>
+<div class="rbtn" id="bMag">✦<div id="mpCost"></div><small>Czar</small></div>
+<div class="rbtn" id="bRoll">⤾<small>Unik</small></div>
+<div class="rbtn" id="bPot">🧪<b id="potN">0</b></div>
+<div class="rbtn" id="bUse">Rozmawiaj</div>
+
+<div class="panel" id="dialog"><div id="dName"></div><div id="dText"></div><div id="dOpts"></div></div>
+<div class="panel" id="menu">
+  <button class="btn" id="closeMenu">✕</button>
+  <div class="tabs" id="mTabs"></div>
+  <div id="mBody"></div>
+</div>
+
+<div class="overlay" id="start">
+  <h1>Kroniki Wrzosu</h1>
+  <div class="sub">Opowieść o rycerzu, który sam wybiera, kim się stanie.</div>
+  <button class="btn" id="bContinue" style="display:none">Kontynuuj</button>
+  <button class="btn" id="bNew">Nowa gra</button>
+  <p style="font-size:12px;opacity:.7;margin-top:18px">Lewy kciuk — ruch · prawa strona ekranu — obrót kamery<br>⚔ atak (kombo) · ✦ czar · ⤾ unik · 🧪 mikstura</p>
+</div>
+<div class="overlay" id="intro">
+  <h1 style="font-size:clamp(24px,5vw,40px)">Brzezina</h1>
+  <p>Jesteś wędrownym rycerzem bez imienia i bez pana. Twoja droga prowadzi do Brzeziny — małej wioski na skraju Starego Lasu.<br><br>
+  Bandyci Wronisława łupią kupieckie wozy, a nocą z ruin Starej Strażnicy wypełzają upiory. Ludzie potrzebują bohatera… albo kogoś, kto wykorzysta ich strach.<br><br>
+  Każdy twój wybór zmieni to, kim się staniesz — i jak będą patrzeć na ciebie inni.</p>
+  <p style="color:#f0d060">Towarzyszy ci wierna lisica Iskra.</p>
+  <button class="btn" id="bBegin" style="font-size:18px;padding:12px 30px">Rozpocznij wędrówkę</button>
+</div>
+<div class="overlay" id="death">
+  <h1 style="color:#e05050">Padłeś</h1>
+  <p>Budzisz się w Brzezinie, poobijany. Część niewydanego doświadczenia przepadła, a na twarzy zostanie blizna…</p>
+  <button class="btn" id="bRespawn" style="font-size:18px;padding:12px 30px">Wstań</button>
+</div>
+<div class="overlay" id="victory">
+  <h1>Zwycięstwo!</h1>
+  <p id="vText"></p>
+  <button class="btn" id="bVic" style="font-size:18px;padding:12px 30px">Wędruj dalej</button>
+</div>
+<div id="fade"></div>
+<div id="err"><h2>Brak WebGL</h2><p>To urządzenie nie obsługuje grafiki 3D (WebGL). Zaktualizuj Android System WebView / Chrome.</p><pre id="errMsg"></pre></div>
+<script src="game.js"></script>
+</body>
+</html>

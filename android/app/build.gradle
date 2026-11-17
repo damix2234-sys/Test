@@ -1,0 +1,32 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'pl.kroniki.wrzosu'
+    compileSdk 34
+    defaultConfig {
+        applicationId "pl.kroniki.wrzosu"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+    signingConfigs {
+        release {
+            storeFile file('kroniki.keystore')
+            storePassword 'kroniki123'
+            keyAlias 'kroniki'
+            keyPassword 'kroniki123'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    sourceSets { main { assets.srcDirs = ['../../web/dist'] } }
+}

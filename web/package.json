@@ -1,0 +1,10 @@
+{
+  "name": "kroniki-wrzosu",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --minify --format=iife --target=es2019 --outfile=dist/game.js && cp index.html dist/"
+  },
+  "dependencies": { "three": "0.160.0" },
+  "devDependencies": { "esbuild": "0.24.0" }
+}
