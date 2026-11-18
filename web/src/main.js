@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { buildWorld, heightAt, LOC, forestness, windowMat, glowMats, WORLD_HALF } from './world.js';
 import { makeHumanoid, makeQuad, animHumanoid, animQuad } from './characters.js';
 import { SFX, initAudio, musicTick, setMusic } from './audio.js';
+import { loadGLB, prepareModel, Animator, attachToBone, findBone, cleanClips, makeRig, makeQuadRig } from './animator.js';
 
 // ================= utilities =================
 const $ = id => document.getElementById(id);
@@ -177,9 +178,74 @@ const P = {
   rollT: 0, rollCd: 0, rollDir: { x: 0, z: 1 }, invuln: 0, castT: 0,
   dead: false, deadT: 0, lastHurt: -99, speed: 0, kvx: 0, kvz: 0,
 };
+// ---- detailed rigged hero model (GLB) ----
+const HERO_SCALE = 1.12;
+let heroM = null;
+const ATK = [
+  { clip: 'Hema_Zornhau', hit: 0.33, len: 1.2, name: 'Zornhau' },
+  { clip: 'Hema_Zwerchhau', hit: 0.36, len: 1.2, name: 'Zwerchhau' },
+  { clip: 'Hema_Scheitelhau', hit: 0.38, len: 1.4, name: 'Scheitelhau' },
+];
+const ATK_SPEED = 1.6, ATK_END = 0.72, ROLL_T = 0.55;
+let RIG = null;
+Promise.all(['hero', 'npc_bandit', 'npc_man', 'npc_woman', 'fox'].map(loadGLB)).then(([gltf, bandit, man, woman, foxG]) => {
+  const clips = cleanClips(gltf.animations);
+  RIG = { clips, bandit, man, woman, fox: foxG };
+  { const r = makeQuadRig(foxG, { length: 1.05 }); scene.remove(fox.mesh.group); fox.mesh = r; scene.add(r.group); }
+  const root = prepareModel(gltf.scene, { scale: HERO_SCALE });
+  scene.add(root);
+  const anim = new Animator(root, clips, { idle: 'Hema_Guard', walkSpeed: 1.5 * HERO_SCALE, jogSpeed: 4.0 * HERO_SCALE });
+  // halo & horns follow the head bone
+  const h = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.022, 6, 20), haloMat);
+  attachToBone(root, 'Head', h, new THREE.Vector3(0, 1.97, -0.01), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
+  const hg = new THREE.Group();
+  for (const sx of [-1, 1]) { const c = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.16, 6), hornMat); c.position.set(sx * 0.07, 0.05, 0); c.rotation.z = -sx * 0.45; hg.add(c); }
+  attachToBone(root, 'Head', hg, new THREE.Vector3(0, 1.83, 0.03));
+  root.add(aura); aura.scale.setScalar(1 / HERO_SCALE);
+  let steel = null, skin = null;
+  root.traverse(o => { if (o.material) { if (o.material.name === 'M_Steel') steel = o.material; if (o.material.name === 'M_HeroSkin') skin = o.material; } });
+  heroM = { root, anim, halo: h, horns: hg, steel, skin };
+  root.position.copy(P.pos); root.rotation.y = P.yaw; anim.update(0.016, 0);
+  hero.group.visible = false;
+  refreshHeroLook();
+  upgradeNPCs();
+}).catch(e => console.warn('models', e));
+function rigFor(spec) {
+  if (spec.model === 'fox') return makeQuadRig(RIG.fox, spec);
+  const m = { bandit: RIG.bandit, man: RIG.man, woman: RIG.woman }[spec.model];
+  return makeRig(m, RIG.clips, spec);
+}
+// animate either a rigged GLB character or a procedural fallback humanoid
+function animChar(mesh, dt, spd, attackT = -1, opts = {}) {
+  if (mesh.kind === 'rig') {
+    if (opts.kneel) { if (!mesh.anim.isPlaying('Sit')) mesh.anim.play('Sit', { loop: true, hold: true, fadeIn: 0.3 }); mesh.group.position.y -= 0.42 * mesh.scale; }
+    if (opts.talk !== undefined) { const tk = mesh.anim.isPlaying('Talk'); if (opts.talk && !tk && !mesh.anim.one) mesh.anim.play('Talk', { loop: true, hold: true, fadeIn: 0.4 }); if (!opts.talk && tk) { mesh.anim.one.hold = false; mesh.anim.release(0.4); } }
+    mesh.anim.update(dt, spd / mesh.scale * 1.12);
+  } else animHumanoid(mesh, dt, spd, attackT, opts);
+}
+const HAIR_COLORS = [0x1a1210, 0x3a2416, 0x5a3a22, 0x8a6a40, 0xb08a50, 0x6a2a18, 0x9a9a9a];
+const OUTFIT_TINTS = [0xffffff, 0xd8c8b0, 0xb8c8a8, 0xc8b0a0, 0xa8b0c8, 0xe0d0c0, 0xc0a890];
+const pick = a => a[Math.floor(Math.random() * a.length)];
+function upgradeNPCs() {
+  for (const n of npcs) {
+    if (n.mesh.kind === 'rig') continue;
+    let spec = n.rig;
+    if (!spec) { const fem = n.look.dress; spec = fem ? { model: 'woman', hair: [pick(['Hair_Long', 'Hair_Buns'])], tint: { hair: pick(HAIR_COLORS), outfit: pick(OUTFIT_TINTS) } } : { model: 'man', hair: [pick(['Hair_SimpleParted', 'Hair_Buzzed']), ...(Math.random() < 0.4 ? ['Hair_Beard'] : [])], tint: { hair: pick(HAIR_COLORS), outfit: pick(OUTFIT_TINTS) } }; if (n.look.scale) spec.scale = 1.12 * (n.look.scale + 0.15); }
+    const r = rigFor(spec); scene.remove(n.mesh.group); n.mesh = r; scene.add(r.group);
+  }
+}
+
 const maxHp = () => 100 + 20 * S.stats.sila;
 const maxMana = () => 60 + 25 * S.stats.magia;
 function refreshHeroLook() {
+  if (heroM) {
+    const m = S.morality;
+    heroM.halo.visible = m >= 40; heroM.horns.visible = m <= -40;
+    auraMat.color.set(m >= 0 ? 0xffe080 : 0xff3020); auraMat.opacity = Math.abs(m) > 60 ? 0.35 : 0;
+    heroM.root.scale.setScalar(HERO_SCALE * (1 + S.stats.sila * 0.018));
+    if (heroM.skin) { const mg = S.stats.magia; heroM.skin.emissive.setRGB(0.02 * mg, 0.04 * mg, 0.1 * mg); if (m <= -70) heroM.skin.color.setRGB(0.85, 0.78, 0.78); else heroM.skin.color.setRGB(1, 1, 1); }
+    if (heroM.steel) { heroM.steel.color.set([0xa8a090, 0xe0e6ee, 0xa8d4ff][S.sword]); heroM.steel.emissive.set(S.sword === 2 ? 0x1a3a8a : 0x000000); }
+  }
   halo.visible = S.morality >= 40;
   horns.visible = S.morality <= -40;
   const m = S.morality;
@@ -213,11 +279,11 @@ fox.pos.y = heightAt(fox.pos.x, fox.pos.z); fox.mesh.group.position.copy(fox.pos
 
 // ================= enemies =================
 const EDEF = {
-  bandit: { name: 'Bandyta', hp: 45, dmg: 9, speed: 4.0, range: 1.7, aggro: 15, windup: 0.5, cd: 1.5, xp: 30, gold: [4, 14], radius: 0.45, renown: 1, make: () => makeHumanoid({ shirt: [0x6b2a1f, 0x4a4a2a, 0x5a3a2a][Math.floor(Math.random() * 3)], pants: 0x2e2a22, hair: 0x1c140c, hood: Math.random() < 0.5 ? 0x3a2a1a : null, weapon: true, blade: 0x8a8a8a }) },
-  wolf: { name: 'Wilk', hp: 30, dmg: 7, speed: 6.0, range: 1.4, aggro: 17, windup: 0.35, cd: 1.3, xp: 20, gold: [0, 0], radius: 0.5, quad: true, renown: 1, make: () => makeQuad({ color: 0x6e6e72, belly: 0xb0b0b0, scale: 1.15, eye: 0xffcc33 }) },
-  ghoul: { name: 'Upiór', hp: 60, dmg: 12, speed: 3.5, range: 1.7, aggro: 20, windup: 0.6, cd: 1.6, xp: 45, gold: [2, 10], radius: 0.45, renown: 2, make: () => makeHumanoid({ skin: 0xb8c4b0, shirt: 0x4b5a4a, pants: 0x3a4038, hair: 0x2a2f2a, eyeGlow: 0x66ff99, weapon: true, blade: 0x6a7a6a, scale: 1.05, thin: true }) },
-  leader: { name: 'Herszt Wronisław', hp: 190, dmg: 14, speed: 4.2, range: 1.9, aggro: 22, windup: 0.5, cd: 1.2, xp: 150, gold: [0, 0], radius: 0.55, renown: 5, make: () => makeHumanoid({ shirt: 0x1f1f1f, pants: 0x3d1010, hair: 0x111111, beard: 0x111111, weapon: true, blade: 0xb0b0b0, scale: 1.2, cape: 0x111111 }) },
-  boss: { name: 'Rycerz Popiołu', hp: 750, dmg: 24, speed: 3.3, range: 3.4, aggro: 34, windup: 0.8, cd: 1.6, xp: 800, gold: [300, 300], radius: 1.0, renown: 30, make: () => makeHumanoid({ skin: 0x4a4038, shirt: 0x6a6a74, pants: 0x4a4a52, boots: 0x2a2a2a, helmet: 0x7a7a84, eyeGlow: 0xff6a00, weapon: true, blade: 0x3a2a2a, bladeGlow: 0xff4a00, scale: 2.1, cape: 0x2a1010 }) },
+  bandit: { name: 'Bandyta', hp: 45, dmg: 9, speed: 4.0, range: 1.7, aggro: 15, windup: 0.5, cd: 1.5, xp: 30, gold: [4, 14], radius: 0.45, renown: 1, rig: () => ({ model: 'bandit', tint: { outfit: pick([0xffffff, 0xc8a080, 0xa09080, 0xb07060, 0x9a9a8a]) } }), make: () => makeHumanoid({ shirt: [0x6b2a1f, 0x4a4a2a, 0x5a3a2a][Math.floor(Math.random() * 3)], pants: 0x2e2a22, hair: 0x1c140c, hood: Math.random() < 0.5 ? 0x3a2a1a : null, weapon: true, blade: 0x8a8a8a }) },
+  wolf: { name: 'Wilk', rig: () => ({ model: 'fox', length: 1.55, color: pick([0x6e6e72, 0x5a5650, 0x8a8a8a]) }), hp: 30, dmg: 7, speed: 6.0, range: 1.4, aggro: 17, windup: 0.35, cd: 1.3, xp: 20, gold: [0, 0], radius: 0.5, quad: true, renown: 1, make: () => makeQuad({ color: 0x6e6e72, belly: 0xb0b0b0, scale: 1.15, eye: 0xffcc33 }) },
+  ghoul: { name: 'Upiór', hp: 60, dmg: 12, speed: 3.5, range: 1.7, aggro: 20, windup: 0.6, cd: 1.6, xp: 45, gold: [2, 10], radius: 0.45, renown: 2, rig: () => ({ model: 'bandit', tint: { outfit: 0x8a9a80, skin: 0x9ab8a0 }, eyeGlow: 0x66ff99 }), make: () => makeHumanoid({ skin: 0xb8c4b0, shirt: 0x4b5a4a, pants: 0x3a4038, hair: 0x2a2f2a, eyeGlow: 0x66ff99, weapon: true, blade: 0x6a7a6a, scale: 1.05, thin: true }) },
+  leader: { name: 'Herszt Wronisław', hp: 190, dmg: 14, speed: 4.2, range: 1.9, aggro: 22, windup: 0.5, cd: 1.2, xp: 150, gold: [0, 0], radius: 0.55, renown: 5, rig: () => ({ model: 'bandit', scale: 1.3, tint: { outfit: 0x585050 } }), make: () => makeHumanoid({ shirt: 0x1f1f1f, pants: 0x3d1010, hair: 0x111111, beard: 0x111111, weapon: true, blade: 0xb0b0b0, scale: 1.2, cape: 0x111111 }) },
+  boss: { name: 'Rycerz Popiołu', hp: 750, dmg: 24, speed: 3.3, range: 3.4, aggro: 34, windup: 0.8, cd: 1.6, xp: 800, gold: [300, 300], radius: 1.0, renown: 30, rig: () => ({ model: 'bandit', scale: 2.15, tint: { outfit: 0x4a4448, skin: 0x6a5a50 }, eyeGlow: 0xff6a00, swordGlow: 0xff4a00 }), make: () => makeHumanoid({ skin: 0x4a4038, shirt: 0x6a6a74, pants: 0x4a4a52, boots: 0x2a2a2a, helmet: 0x7a7a84, eyeGlow: 0xff6a00, weapon: true, blade: 0x3a2a2a, bladeGlow: 0xff4a00, scale: 2.1, cape: 0x2a1010 }) },
 };
 const enemies = [];
 let targetEnemy = null, targetT = 0;
@@ -225,7 +291,7 @@ let targetEnemy = null, targetT = 0;
 class Enemy {
   constructor(type, x, z, tag = 'wild', home = null) {
     this.type = type; this.def = EDEF[type]; this.tag = tag;
-    this.mesh = this.def.make(); scene.add(this.mesh.group);
+    this.mesh = (RIG && this.def.rig) ? rigFor(this.def.rig()) : this.def.make(); scene.add(this.mesh.group);
     this.pos = new THREE.Vector3(x, heightAt(x, z), z);
     this.home = home || { x, z };
     this.yaw = Math.random() * 6.28; this.hp = this.def.hp; this.maxHp = this.def.hp;
@@ -248,7 +314,8 @@ class Enemy {
     if (this.dead) {
       this.deadT += dt;
       const k = Math.min(1, this.deadT * 2.5);
-      if (this.mesh.kind === 'quad') g.rotation.z = k * Math.PI / 2; else g.rotation.x = -k * Math.PI / 2;
+      if (this.mesh.kind === 'rig') this.mesh.anim.update(dt, 0);
+      else if (this.mesh.kind === 'quad' || this.mesh.kind === 'qrig') g.rotation.z = k * Math.PI / 2; else g.rotation.x = -k * Math.PI / 2;
       if (this.deadT > 1.8) g.position.y -= dt * 0.7;
       if (this.deadT > 3.2) this.remove = true;
       return;
@@ -265,7 +332,7 @@ class Enemy {
     if (this.state === 'surrender') {
       this.yaw = turnTo(this.yaw, toP, dt * 3);
       g.position.copy(this.pos); g.rotation.y = this.yaw;
-      animHumanoid(this.mesh, dt, 0, -1, { kneel: true });
+      animChar(this.mesh, dt, 0, -1, { kneel: true });
       return;
     }
     if (this.state === 'leaving') {
@@ -275,7 +342,8 @@ class Enemy {
       this.yaw = turnTo(this.yaw, moveDir, dt * 6);
       moveEntity(this.pos, Math.sin(moveDir) * moveSpd * dt, Math.cos(moveDir) * moveSpd * dt, def.radius);
       g.position.copy(this.pos); g.rotation.y = this.yaw;
-      animHumanoid(this.mesh, dt, moveSpd);
+      if (this.mesh.kind === 'rig' && this.mesh.anim.one) this.mesh.anim.stopAll();
+      animChar(this.mesh, dt, moveSpd);
       return;
     }
     const pv = Math.hypot(P.pos.x - LOC.village.x, P.pos.z - LOC.village.z);
@@ -299,6 +367,7 @@ class Enemy {
         if (d < def.range + 0.4 && this.atkCd <= 0) {
           this.state = 'windup'; this.t = 0;
           this.slamPhase = this.type === 'boss' && (this.atkCount % 3 === 2);
+          if (this.mesh.kind === 'rig') this.startAttackAnim();
           if (this.slamPhase) showSlamRing(this);
         }
         this.yaw = turnTo(this.yaw, toP, dt * 8);
@@ -346,13 +415,25 @@ class Enemy {
     this.pos.y = heightAt(this.pos.x, this.pos.z);
     this.speed = lerp(this.speed, moveSpd, Math.min(1, dt * 8));
     g.position.copy(this.pos); g.rotation.y = this.yaw;
-    if (this.mesh.kind === 'quad') animQuad(this.mesh, dt, this.speed, atkAnim);
-    else animHumanoid(this.mesh, dt, this.speed, atkAnim);
+    if (this.mesh.kind === 'qrig') this.mesh.update(dt, this.speed, atkAnim);
+    else if (this.mesh.kind === 'quad') animQuad(this.mesh, dt, this.speed, atkAnim);
+    else animChar(this.mesh, dt, this.state === 'windup' || this.state === 'recover' ? 0 : this.speed, atkAnim);
     // ghouls burn at daylight
     if (this.type === 'ghoul' && dayK > 0.75 && this.tag === 'wild') {
       this.hp -= dt * 15; if (Math.random() < dt * 8) burst(this.pos.x, this.pos.y + 1.2, this.pos.z, 0xff8a2a, 2, 1, 2);
       if (this.hp <= 0) killEnemy(this, true);
     }
+  }
+  startAttackAnim() {
+    // historical longsword techniques; clip time to the moment of contact (seconds at normal speed)
+    const T = { Hema_Zornhau: 0.40, Hema_Zwerchhau: 0.433, Hema_Scheitelhau: 0.533, Hema_Stich: 0.367 };
+    let clip;
+    if (this.type === 'boss') clip = this.slamPhase ? 'Hema_Scheitelhau' : pick(['Hema_Zwerchhau', 'Hema_Zornhau']);
+    else if (this.type === 'leader') clip = pick(['Hema_Zornhau', 'Hema_Scheitelhau', 'Hema_Zwerchhau']);
+    else if (this.type === 'ghoul') clip = pick(['Hema_Zornhau', 'Hema_Scheitelhau']);
+    else clip = pick(['Hema_Zornhau', 'Hema_Zwerchhau', 'Hema_Stich']);
+    const wu = this.slamPhase ? 1.1 : this.def.windup;
+    this.mesh.anim.play(clip, { speed: T[clip] / wu, fadeIn: 0.12, fadeOut: 0.35 });
   }
   strike(d, toP) {
     const def = this.def;
@@ -368,7 +449,7 @@ class Enemy {
       }
       return;
     }
-    if (this.mesh.kind === 'quad') SFX.bark(); else SFX.swing();
+    if (this.mesh.kind === 'quad' || this.mesh.kind === 'qrig') SFX.bark(); else SFX.swing();
     const arc = this.type === 'boss' ? 1.4 : 1.0;
     if (d < def.range + 0.6 && Math.abs(angDiff(toP, this.yaw)) < arc) hurtPlayer(def.dmg, this, this.type === 'boss' ? 9 : 4);
   }
@@ -398,6 +479,7 @@ function damageEnemy(e, dmg, crit, nx, nz, kb) {
   floatText((crit ? '' : '') + dmg, e.pos.x, e.pos.y + 2.2 * (e.type === 'boss' ? 2 : 1), e.pos.z, crit ? 'crit' : 'dmg', 0.9);
   burst(e.pos.x, e.pos.y + 1.2, e.pos.z, e.type === 'ghoul' ? 0x88ffaa : e.type === 'boss' ? 0xff6a1a : 0xaa1a1a, crit ? 10 : 5, 3, 2.5, 0.45);
   if (e.state === 'idle' || e.state === 'return') e.state = 'chase';
+  if (e.mesh.kind === 'rig' && e.state !== 'windup' && e.type !== 'boss' && e.hp > 0) e.mesh.anim.play('Hit', { speed: 1.6, fadeIn: 0.04, fadeOut: 0.15 });
   targetEnemy = e; targetT = 5;
   if (e.type === 'leader' && !S.flags.leaderFate && e.hp < e.maxHp * 0.25) {
     e.hp = Math.ceil(e.maxHp * 0.25); e.state = 'surrender'; e.wind = 0; e.flash = 0; e.setFlash();
@@ -410,6 +492,7 @@ function damageEnemy(e, dmg, crit, nx, nz, kb) {
 function killEnemy(e, silent = false) {
   if (e.dead) return;
   e.dead = true; e.deadT = 0; e.hp = 0; e.flash = 0; e.wind = 0; e.setFlash();
+  if (e.mesh.kind === 'rig') e.mesh.anim.play('Death', { hold: true, fadeIn: 0.08 });
   if (slamRingOwner === e) hideSlamRing();
   if (silent) { e.remove = true; return; }
   S.kills++;
@@ -456,7 +539,8 @@ function hurtPlayer(dmg, src, kb = 4) {
   hurtFlash = 1; SFX.hurt(); shake(0.25);
   floatText('-' + dmg, P.pos.x, P.pos.y + 2.2, P.pos.z, 'hurt', 0.9);
   if (src) { const dx = P.pos.x - src.pos.x, dz = P.pos.z - src.pos.z, d = Math.hypot(dx, dz) || 1; P.kvx = dx / d * kb; P.kvz = dz / d * kb; }
-  if (P.attackT >= 0 && Math.random() < 0.5) { P.attackT = -1; }
+  if (P.attackT >= 0 && Math.random() < 0.4) { P.attackT = -1; }
+  if (heroM && P.attackT < 0 && P.hp > 0) heroM.anim.play('Hit', { speed: 1.4, fadeIn: 0.05, fadeOut: 0.15 });
   if (P.hp <= 0) { P.hp = 0; P.dead = true; P.deadT = 0; SFX.death(); }
 }
 function respawn() {
@@ -465,6 +549,7 @@ function respawn() {
   S.xp -= lost; S.scars++;
   P.dead = false; P.hp = maxHp(); P.mana = maxMana();
   P.pos.set(0, 2.5, 9); hero.group.rotation.set(0, 0, 0);
+  if (heroM) heroM.anim.stopAll();
   fox.pos.set(2, 2.5, 11);
   for (const e of enemies) if (!e.dead && e.state !== 'surrender') { e.state = 'return'; e.hp = e.maxHp; }
   refreshHeroLook();
@@ -519,6 +604,7 @@ function castSpell() {
   if (P.dead || paused) return;
   if (P.mana < 20) { toast('Za mało many!', 'g', 1.5); return; }
   P.mana -= 20; P.castT = 0.4;
+  if (heroM && P.attackT < 0) heroM.anim.play('Cast', { speed: 1.2, fadeIn: 0.06 });
   let best = null, bd = 1e9;
   for (const e of enemies) {
     if (e.dead || e.state === 'surrender' || e.state === 'leaving') continue;
@@ -648,15 +734,15 @@ function nearestEnemy(maxD) {
 }
 function doAttack() {
   if (P.dead || paused || P.rollT > 0) return;
-  if (P.attackT >= 0) { if (P.attackT > 0.35) P.comboQ = true; return; }
+  if (P.attackT >= 0) { if (P.attackT > ATK[P.combo].hit - 0.2) P.comboQ = true; return; }
   startAttack();
 }
 function startAttack() {
-  P.combo = P.comboTimer > 0 ? (P.combo + 1) % 3 : 0;
-  P.attackT = 0; P.atkHit = false; P.comboQ = false;
+  P.combo = (P.comboTimer > 0 || P.attackT >= 0) ? (P.combo + 1) % 3 : 0;
+  P.attackT = 0; P.atkHit = false; P.comboQ = false; P.swung = false;
   const t = nearestEnemy(5.5);
   if (t) P.yaw = Math.atan2(t.pos.x - P.pos.x, t.pos.z - P.pos.z);
-  SFX.swing();
+  if (heroM) heroM.anim.play(ATK[P.combo].clip, { speed: ATK_SPEED, fadeIn: 0.09, fadeOut: 0.3 });
 }
 function meleeHit() {
   const base = SWORDS[S.sword].dmg + 5 * S.stats.sila;
@@ -664,7 +750,7 @@ function meleeHit() {
   for (const e of enemies) {
     if (e.dead || e.state === 'surrender' || e.state === 'leaving') continue;
     const dx = e.pos.x - P.pos.x, dz = e.pos.z - P.pos.z, d = Math.hypot(dx, dz);
-    if (d > 2.4 + e.def.radius) continue;
+    if (d > 2.75 + e.def.radius) continue;
     if (Math.abs(angDiff(Math.atan2(dx, dz), P.yaw)) > 1.25 && d > 1.2) continue;
     let dmg = base * (P.combo === 2 ? 1.6 : 1) * rand(0.9, 1.1);
     const crit = Math.random() < 0.06 + 0.05 * S.stats.zrecznosc;
@@ -682,7 +768,8 @@ function doRoll() {
   if (mv.m > 0.1) { dx = mv.x; dz = mv.z; } else { dx = Math.sin(P.yaw); dz = Math.cos(P.yaw); }
   const d = Math.hypot(dx, dz) || 1;
   P.rollDir = { x: dx / d, z: dz / d }; P.yaw = Math.atan2(dx, dz);
-  P.rollT = 0.42; P.rollCd = 0.75; P.attackT = -1;
+  P.rollT = ROLL_T; P.rollCd = 0.85; P.attackT = -1;
+  if (heroM) heroM.anim.play('Roll', { speed: 1.47 / ROLL_T, fadeIn: 0.05, fadeOut: 0.15 });
   SFX.roll();
   burst(P.pos.x, P.pos.y + 0.2, P.pos.z, 0x9a8a6a, 5, 2, 1, 0.4);
 }
@@ -691,6 +778,7 @@ function drinkPotion() {
   if (S.potions <= 0) { toast('Nie masz mikstur. Kup je u kupca Mirka.', '', 2); return; }
   if (P.hp >= maxHp()) { toast('Zdrowie jest pełne.', '', 1.5); return; }
   S.potions--; const h = 60 + 10 * S.stats.sila; P.hp = Math.min(maxHp(), P.hp + h);
+  if (heroM) heroM.anim.play('Drink', { speed: 1.7, fadeIn: 0.15 });
   SFX.drink(); floatText('+' + h, P.pos.x, P.pos.y + 2.2, P.pos.z, 'heal');
   burst(P.pos.x, P.pos.y + 1, P.pos.z, 0xff5050, 10, 2, 3, 0.6);
 }
@@ -711,7 +799,8 @@ function moveVector() {
 function updatePlayer(dt) {
   if (P.dead) {
     P.deadT += dt;
-    hero.group.rotation.x = -Math.min(1, P.deadT * 2) * Math.PI / 2;
+    if (heroM) { heroM.anim.update(dt, 0); if (!heroM.anim.isPlaying('Death')) heroM.anim.play('Death', { hold: true, fadeIn: 0.15 }); }
+    else hero.group.rotation.x = -Math.min(1, P.deadT * 2) * Math.PI / 2;
     if (P.deadT > 2.2 && $('death').style.display !== 'flex') { $('death').style.display = 'flex'; paused = true; }
     return;
   }
@@ -724,14 +813,17 @@ function updatePlayer(dt) {
     const rs = 12 + S.stats.zrecznosc;
     vx = P.rollDir.x * rs; vz = P.rollDir.z * rs;
   } else if (P.attackT >= 0) {
-    P.attackT += dt / 0.42;
-    if (!P.atkHit && P.attackT >= 0.45) { P.atkHit = true; meleeHit(); }
-    if (mv.m > 0.1) { vx = mv.x * speed * 0.2; vz = mv.z * speed * 0.2; }
-    const lunge = P.attackT > 0.3 && P.attackT < 0.55 ? 3 : 0;
+    const A = ATK[P.combo];
+    P.attackT += dt / (A.len / ATK_SPEED);
+    if (!P.swung && P.attackT >= A.hit - 0.1) { P.swung = true; SFX.swing(); }
+    if (!P.atkHit && P.attackT >= A.hit) { P.atkHit = true; meleeHit(); }
+    if (mv.m > 0.1) { vx = mv.x * speed * 0.15; vz = mv.z * speed * 0.15; }
+    const lunge = P.attackT > A.hit - 0.16 && P.attackT < A.hit + 0.04 ? (P.combo === 2 ? 5 : 3.5) : 0;
     vx += Math.sin(P.yaw) * lunge; vz += Math.cos(P.yaw) * lunge;
-    if (P.attackT >= 1) {
-      P.attackT = -1; P.comboTimer = 0.45;
-      if (P.comboQ) startAttack();
+    if (P.comboQ && P.attackT >= A.hit + 0.12) startAttack();
+    else if (P.attackT >= ATK_END) {
+      P.attackT = -1; P.comboTimer = 0.5;
+      if (heroM) heroM.anim.release(0.3);
     }
   } else if (mv.m > 0.05) {
     vx = mv.x * speed * mv.m; vz = mv.z * speed * mv.m;
@@ -745,16 +837,25 @@ function updatePlayer(dt) {
   P.mana = Math.min(maxMana(), P.mana + dt * (5 + S.stats.magia));
   if (clock.elapsedTime - P.lastHurt > 6) P.hp = Math.min(maxHp(), P.hp + dt * 2.5);
   // visuals
+  if (heroM) {
+    const r = heroM.root;
+    r.position.copy(P.pos); if (P.pos.y < 0) r.position.y = Math.max(P.pos.y, -0.6);
+    r.rotation.y = P.yaw;
+    heroM.anim.update(dt, P.rollT > 0 || P.attackT >= 0 ? 0 : P.speed / HERO_SCALE);
+    r.visible = !(P.invuln > 0 && Math.floor(P.invuln * 30) % 2 === 0 && P.rollT <= 0);
+    aura.rotation.z += dt;
+    return;
+  }
   const g = hero.group;
   g.position.copy(P.pos);
   if (P.pos.y < 0) g.position.y = Math.max(P.pos.y, -0.6);
   g.rotation.y = P.yaw;
   if (P.rollT > 0) {
-    const k = 1 - P.rollT / 0.42;
+    const k = 1 - P.rollT / ROLL_T;
     hero.body.rotation.x = k * Math.PI * 2; hero.body.position.y = Math.sin(k * Math.PI) * 0.5 - 0.3;
     hero.legL.rotation.x = -1.2; hero.legR.rotation.x = -1.2; hero.armL.rotation.x = -1.5; hero.armR.rotation.x = -1.5;
   } else {
-    animHumanoid(hero, dt, P.speed, P.attackT, { cast: P.castT > 0 });
+    animHumanoid(hero, dt, P.speed, P.attackT >= 0 ? Math.min(1, P.attackT / ATK_END) : -1, { cast: P.castT > 0 });
   }
   g.visible = !(P.invuln > 0 && Math.floor(P.invuln * 30) % 2 === 0 && P.rollT <= 0);
   aura.rotation.z += dt;
@@ -793,7 +894,7 @@ function updateFox(dt) {
   f.pos.y = heightAt(f.pos.x, f.pos.z);
   g.position.copy(f.pos); if (f.pos.y < 0) g.position.y = Math.max(f.pos.y, -0.3);
   g.rotation.y = f.yaw;
-  animQuad(f.mesh, dt, f.speed, f.atkT);
+  if (f.mesh.kind === 'qrig') f.mesh.update(dt, f.speed, f.atkT); else animQuad(f.mesh, dt, f.speed, f.atkT);
 }
 
 // ================= NPCs =================
@@ -801,15 +902,15 @@ const npcs = [];
 function addNPC(id, name, spot, look, opts = {}) {
   const mesh = makeHumanoid(look);
   scene.add(mesh.group);
-  const n = { id, name, mesh, pos: new THREE.Vector3(spot.x, heightAt(spot.x, spot.z), spot.z), home: { x: spot.x, z: spot.z }, yaw: Math.atan2(-spot.x, -spot.z), wander: opts.wander || 0, target: null, wt: rand(1, 5), speed: 0, bubbleCd: rand(2, 8), talk: opts.talk, flee: 0 };
+  const n = { id, name, mesh, look, rig: opts.rig, pos: new THREE.Vector3(spot.x, heightAt(spot.x, spot.z), spot.z), home: { x: spot.x, z: spot.z }, yaw: Math.atan2(-spot.x, -spot.z), wander: opts.wander || 0, target: null, wt: rand(1, 5), speed: 0, bubbleCd: rand(2, 8), talk: opts.talk, flee: 0 };
   npcs.push(n); return n;
 }
-const NPC_ELDER = addNPC('elder', 'Sołtys Bogumił', W.spots.elder, { shirt: 0x6a4a2a, pants: 0x3a3a3a, hair: 0xdddddd, beard: 0xeeeeee, skin: 0xd8a880 }, { talk: talkElder });
-const NPC_HERB = addNPC('herb', 'Zielarka Jagna', W.spots.herbalist, { shirt: 0x4a6a3a, pants: 0x3a2a1a, hair: 0x8a5a2a, dress: 0x3a5a2a, longHair: true }, { talk: talkHerbalist });
-const NPC_MERCH = addNPC('merch', 'Kupiec Mirek', W.spots.merchant, { shirt: 0x8a6a2a, pants: 0x4a3a2a, hair: 0x2a1a0a, beard: 0x2a1a0a }, { talk: talkMerchant });
-const NPC_LENDER = addNPC('lender', 'Lichwiarz Grzegorz', W.spots.lender, { shirt: 0x5a1a3a, pants: 0x2a2a2a, hair: 0x4a4a4a, skin: 0xe8c0a0 }, { talk: talkLender });
-const NPC_WIDOW = addNPC('widow', 'Wdowa Halina', W.spots.widow, { shirt: 0x3a3a4a, pants: 0x2a2a2a, hair: 0x5a4a3a, dress: 0x2a2a3a, longHair: true }, { talk: talkWidow });
-const NPC_ALCH = addNPC('alch', 'Alchemik Kruk', W.spots.alchemist, { shirt: 0x2a1a3a, pants: 0x1a1a2a, hood: 0x1a0a2a, staff: 0x66ff88 }, { talk: talkAlchemist });
+const NPC_ELDER = addNPC('elder', 'Sołtys Bogumił', W.spots.elder, { shirt: 0x6a4a2a, pants: 0x3a3a3a, hair: 0xdddddd, beard: 0xeeeeee, skin: 0xd8a880 }, { talk: talkElder, rig: { model: 'man', hair: ['Hair_SimpleParted', 'Hair_Beard'], tint: { hair: 0xd8d8d8, outfit: 0xc8b090 } } });
+const NPC_HERB = addNPC('herb', 'Zielarka Jagna', W.spots.herbalist, { shirt: 0x4a6a3a, pants: 0x3a2a1a, hair: 0x8a5a2a, dress: 0x3a5a2a, longHair: true }, { talk: talkHerbalist, rig: { model: 'woman', hair: ['Hair_Long'], tint: { hair: 0x6a3a1a, outfit: 0xa8c890 } } });
+const NPC_MERCH = addNPC('merch', 'Kupiec Mirek', W.spots.merchant, { shirt: 0x8a6a2a, pants: 0x4a3a2a, hair: 0x2a1a0a, beard: 0x2a1a0a }, { talk: talkMerchant, rig: { model: 'man', hair: ['Hair_Buzzed', 'Hair_Beard'], tint: { hair: 0x2a1a10, outfit: 0xe8c890 } } });
+const NPC_LENDER = addNPC('lender', 'Lichwiarz Grzegorz', W.spots.lender, { shirt: 0x5a1a3a, pants: 0x2a2a2a, hair: 0x4a4a4a, skin: 0xe8c0a0 }, { talk: talkLender, rig: { model: 'man', hair: ['Hair_SimpleParted'], tint: { hair: 0x3a3a3a, outfit: 0xb090b8 } } });
+const NPC_WIDOW = addNPC('widow', 'Wdowa Halina', W.spots.widow, { shirt: 0x3a3a4a, pants: 0x2a2a2a, hair: 0x5a4a3a, dress: 0x2a2a3a, longHair: true }, { talk: talkWidow, rig: { model: 'woman', hair: ['Hair_Buns'], tint: { hair: 0x2a2018, outfit: 0x8890a8 } } });
+const NPC_ALCH = addNPC('alch', 'Alchemik Kruk', W.spots.alchemist, { shirt: 0x2a1a3a, pants: 0x1a1a2a, hood: 0x1a0a2a, staff: 0x66ff88 }, { talk: talkAlchemist, rig: { model: 'bandit', hideSword: true, tint: { outfit: 0x7a5a9a }, eyeGlow: 0x66ff88 } });
 const villagerLooks = [
   { shirt: 0xa05a3a, pants: 0x4a3a2a, hair: 0x3a2a1a }, { shirt: 0x5a7a9a, pants: 0x3a3a3a, hair: 0xc8a050, dress: 0x4a6a8a, longHair: true },
   { shirt: 0x7a7a3a, pants: 0x4a3a2a, hair: 0x1a1a1a }, { shirt: 0x9a4a6a, pants: 0x3a2a2a, hair: 0x6a3a1a, dress: 0x8a3a5a, longHair: true },
@@ -831,7 +932,7 @@ function updateNPCs(dt) {
   for (const n of npcs) {
     const g = n.mesh.group;
     const d = dist2(n.pos, P.pos);
-    if (d > 110) { g.visible = false; continue; }
+    if (d > 75) { g.visible = false; continue; }
     g.visible = true;
     let spd = 0;
     n.bubbleCd -= dt;
@@ -870,7 +971,7 @@ function updateNPCs(dt) {
     }
     n.speed = lerp(n.speed, spd, Math.min(1, dt * 6));
     g.position.copy(n.pos); g.rotation.y = n.yaw;
-    animHumanoid(n.mesh, dt, n.speed);
+    animChar(n.mesh, dt, n.speed, -1, n.talk ? { talk: d < 4.5 && !P.dead } : {});
   }
 }
 
@@ -913,6 +1014,7 @@ function takeHerb(h) {
   if (S.herbsHave === 6) { toast(S.quests.herbs === 1 ? 'Masz dość ziela. Wróć do Zielarki Jagny.' : 'Masz dość ziela — ktoś może go potrzebować…', 'q'); S.tracked = 'herbs'; }
 }
 function openChest(c) {
+  if (heroM) heroM.anim.play('Interact', { speed: 1.6, fadeIn: 0.1 });
   S.chestOpened[c.i] = true; c.lid.rotation.x = -1.9;
   const g = Math.round(rand(40, 130)); S.gold += g;
   let txt = `Skrzynia: ${g} zł`;
@@ -1382,7 +1484,7 @@ function renderMenu() {
   } else if (menuTab === 'opts') {
     body.innerHTML = `<h3>Grafika</h3><div id="qBtns" style="display:flex;gap:8px;flex-wrap:wrap"></div>
       <p style="font-size:12px;opacity:.7">Zmiana jakości przeładuje grę (postęp jest zapisywany).</p>
-      <h3>Dźwięk</h3><div id="sBtns"></div><h3>Zapis</h3><div id="saveBtns" style="display:flex;gap:8px;flex-wrap:wrap"></div>`;
+      <h3>Autorzy modeli</h3><p style="font-size:12px;opacity:.8">Postacie, stroje i animacje ruchu: Quaternius (CC0). Lis i wilki: model „Fox” — tomkranis, AsoboStudio, scurest (CC BY 4.0). Animacje walki mieczem według szkoły Liechtenauera, postać bohatera i miecz: autorskie.</p><h3>Dźwięk</h3><div id="sBtns"></div><h3>Zapis</h3><div id="saveBtns" style="display:flex;gap:8px;flex-wrap:wrap"></div>`;
     for (const [q, n] of [['low', 'Niska (szybka)'], ['medium', 'Średnia'], ['high', 'Wysoka']]) {
       const b = document.createElement('button'); b.className = 'btn' + (quality === q ? ' sel' : ''); b.textContent = n;
       b.onclick = () => { saveGame(); try { localStorage.setItem('kw_quality', q); } catch (e) { } location.reload(); };
@@ -1494,4 +1596,4 @@ function frame() {
   renderer.render(scene, camera);
 }
 frame();
-window.__dbg = { P, S: () => S, enemies, npcs, W, LOC, spawnEnemy, setS: v => { S = v; } , talk: id => npcs.find(n => n.id === id).talk() };
+window.__dbg = { refresh: () => refreshHeroLook(), heroM: () => heroM, P, S: () => S, enemies, npcs, W, LOC, spawnEnemy, setS: v => { S = v; } , talk: id => npcs.find(n => n.id === id).talk() };
