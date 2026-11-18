@@ -30,7 +30,7 @@ pants.name='Pants'; boots.name='Boots'
 
 # remove hidden body parts under the trousers/boots
 bm=bmesh.new(); bm.from_mesh(body.data)
-kill=[v for v in bm.verts if v.co.z < 0.86]
+kill=[v for v in bm.verts if v.co.z < 0.985]
 bmesh.ops.delete(bm, geom=kill, context='VERTS'); bm.to_mesh(body.data); bm.free()
 
 # ---------- skin texture: remove stubble, add scars ----------
@@ -79,7 +79,10 @@ def proj(p, d):
     ok,loc,n,fi=body.ray_cast(inv@o, (inv.to_3x3()@Vector(d)).normalized())
     if not ok: return None
     return uv_at(body, body.matrix_world@loc, fi)
-overlay=Image.new('RGBA',(S,S),(0,0,0,0)); od=ImageDraw.Draw(overlay)
+SS2=2
+overlay=Image.new('RGBA',(S*SS2,S*SS2),(0,0,0,0)); od=ImageDraw.Draw(overlay)
+ridge=Image.new('L',(S*SS2,S*SS2),0); rd=ImageDraw.Draw(ridge)
+groove=Image.new('L',(S*SS2,S*SS2),0); gd=ImageDraw.Draw(groove)
 def scar(p0,p1,d=(0,1,0),w=1.0,n=16):
     pts=[]
     for i in range(n+1):
@@ -91,9 +94,13 @@ def scar(p0,p1,d=(0,1,0),w=1.0,n=16):
         if not A or not B: continue
         if abs(A[0]-B[0])+abs(A[1]-B[1])>0.04: continue
         taper=math.sin(math.pi*(i+0.5)/n)**0.6
-        xa,ya=A[0]*S,(1-A[1])*S; xb,yb=B[0]*S,(1-B[1])*S
-        od.line([(xa,ya),(xb,yb)],fill=(178,110,100,110),width=max(2,int(13*w*taper)))
-        od.line([(xa,ya),(xb,yb)],fill=(92,38,40,235),width=max(1,int(5*w*taper)))
+        K2=S*SS2
+        xa,ya=A[0]*K2,(1-A[1])*K2; xb,yb=B[0]*K2,(1-B[1])*K2
+        od.line([(xa,ya),(xb,yb)],fill=(176,112,100,95),width=max(2,int(12*w*taper*SS2)))
+        od.line([(xa,ya),(xb,yb)],fill=(120,52,50,170),width=max(1,int(6*w*taper*SS2)))
+        od.line([(xa,ya),(xb,yb)],fill=(86,32,34,235),width=max(1,int(3*w*taper*SS2)))
+        rd.line([(xa,ya),(xb,yb)],fill=255,width=max(2,int(10*w*taper*SS2)))
+        gd.line([(xa,ya),(xb,yb)],fill=255,width=max(1,int(2.5*w*taper*SS2)))
 def xmark(cx,cz,s,d=(0,1,0),y=0):
     scar((cx-s,y,cz+s),(cx+s,y,cz-s),d); scar((cx-s*0.8,y,cz-s*0.9),(cx+s*0.9,y,cz+s*0.8),d)
 F=(0,1,0)
@@ -125,8 +132,20 @@ B=(0,-1,0)
 for i in range(6):
     x=random.uniform(-0.15,0.15); z=random.uniform(1.0,1.45)
     scar((x-0.07,0,z+0.06),(x+0.07,0,z-0.06),B,1.0,12)
+overlay=overlay.resize((S,S),Image.LANCZOS)
 skin=Image.alpha_composite(skin.convert('RGBA'),overlay).convert('RGB')
 skin.save(OUT+'T_Hero_Skin.png')
+# scar relief -> normal map (raised ridges with a thin central groove), whiteout-blended into the base normal map
+rh=np.asarray(ridge.resize((S,S),Image.LANCZOS).filter(ImageFilter.GaussianBlur(3.0))).astype(np.float32)/255
+gh=np.asarray(groove.resize((S,S),Image.LANCZOS).filter(ImageFilter.GaussianBlur(1.2))).astype(np.float32)/255
+hgt=rh*1.0-gh*0.55
+dy,dx=np.gradient(hgt)
+k=7.0
+nd=np.dstack([-dx*k, dy*k, np.ones_like(hgt)])
+nb=np.asarray(Image.open(TX+'T_Superhero_Male_Normal.png').convert('RGB')).astype(np.float32)/127.5-1
+nn=np.dstack([nb[...,0]+nd[...,0], nb[...,1]+nd[...,1], nb[...,2]*nd[...,2]])
+nn/=np.linalg.norm(nn,axis=2,keepdims=True)
+Image.fromarray(np.clip((nn+1)*127.5,0,255).astype(np.uint8)).save(OUT+'T_Hero_Normal.png')
 
 # eyes -> amber
 eye=Image.open(TX+'T_Eye_Brown.png').convert('RGB')
@@ -149,16 +168,63 @@ def img_tex(mat, path):
     return False
 skin_mat=body.data.materials[0]; skin_mat.name='M_HeroSkin'
 print('skin tex replaced', img_tex(skin_mat, OUT+'T_Hero_Skin.png'))
+for n in skin_mat.node_tree.nodes:
+    if n.type=='TEX_IMAGE' and 'Normal' in n.image.name:
+        n.image=bpy.data.images.load(OUT+'T_Hero_Normal.png'); n.image.colorspace_settings.name='Non-Color'; print('normal map replaced')
 eyes=bpy.data.objects['Eyes']; print('eye tex replaced', img_tex(eyes.data.materials[0], OUT+'T_Hero_Eye.png'))
 
 # ---------- hair ----------
-hair_mat=bpy.data.materials.new('M_HeroHair'); hair_mat.use_nodes=True
-pb=hair_mat.node_tree.nodes['Principled BSDF']
-pb.inputs['Base Color'].default_value=(0.06,0.018,0.013,1); pb.inputs['Roughness'].default_value=0.5
-bpy.data.objects['Eyebrows'].data.materials[0]=hair_mat
+HAIR_RGB=np.array([62,24,17],np.float32)
+def make_strand_texture(path, W=1024, H=1024, seed=5):
+    rnd=random.Random(seed); SS=2; w,h=W*SS,H*SS
+    col=Image.new('RGB',(w,h),tuple(int(c*0.7) for c in HAIR_RGB)); cd=ImageDraw.Draw(col)
+    alpha=Image.new('L',(w,h),0); ad=ImageDraw.Draw(alpha)
+    for i in range(520):
+        x0=rnd.uniform(0.02,0.98)*w; L=h*rnd.uniform(0.6,1.0)
+        wid=rnd.uniform(1.6,4.2)*SS; shade=rnd.uniform(0.55,1.45)
+        c=tuple(int(v) for v in np.clip(HAIR_RGB*shade,0,255))
+        amp=rnd.uniform(3,14)*SS; ph=rnd.uniform(0,6.28); fr=rnd.uniform(0.8,2.4); drift=rnd.uniform(-30,30)*SS
+        pts=[(x0+amp*math.sin(ph+t*fr*math.pi)+drift*t*t, t*L) for t in [k/24 for k in range(25)]]
+        for k in range(24):
+            t=k/24
+            a=int(255*(1.0 if t<0.55 else max(0.0,1-(t-0.55)/0.45)**1.3))
+            ww=max(1,int(wid*(1-0.55*t)))
+            cd.line([pts[k],pts[k+1]],fill=c,width=ww)
+            ad.line([pts[k],pts[k+1]],fill=a,width=ww)
+    col=col.resize((W,H),Image.LANCZOS); alpha=alpha.resize((W,H),Image.LANCZOS)
+    arr=np.asarray(col).astype(np.float32)
+    yy=np.linspace(0,1,H)[:,None,None]
+    arr*= (1+0.30*np.exp(-((yy-0.30)/0.07)**2))       # soft specular band
+    arr*= (0.78+0.22*np.clip(yy*3,0,1))                 # darker roots
+    im=Image.fromarray(np.clip(arr,0,255).astype(np.uint8)); im.putalpha(alpha)
+    im.save(path)
+make_strand_texture(OUT+'T_Hero_Hair.png')
+def hair_material(name, alpha_clip):
+    m=bpy.data.materials.new(name); m.use_nodes=True; nt=m.node_tree
+    pbsdf=nt.nodes['Principled BSDF']
+    tx=nt.nodes.new('ShaderNodeTexImage'); tx.image=bpy.data.images.load(OUT+'T_Hero_Hair.png', check_existing=True)
+    nt.links.new(tx.outputs['Color'], pbsdf.inputs['Base Color'])
+    pbsdf.inputs['Roughness'].default_value=0.55
+    for nm in ('Specular IOR Level','Specular'):
+        if nm in pbsdf.inputs: pbsdf.inputs[nm].default_value=0.18
+    if alpha_clip:
+        rnd=nt.nodes.new('ShaderNodeMath'); rnd.operation='ROUND'
+        nt.links.new(tx.outputs['Alpha'], rnd.inputs[0]); nt.links.new(rnd.outputs[0], pbsdf.inputs['Alpha'])
+        try: m.surface_render_method='DITHERED'
+        except Exception: pass
+    return m
+hair_mat=hair_material('M_HeroHair', True)
+hair_base=hair_material('M_HeroHairBase', False)
+# eyebrows: keep the sculpted brow shading, tint it to the hair colour
+brow=bpy.data.objects['Eyebrows']; bm_=brow.data.materials[0]
+for n in bm_.node_tree.nodes:
+    if n.type=='TEX_IMAGE' and 'BaseColor' in n.image.name:
+        src=np.asarray(Image.open(TX+'T_Hair_1_BaseColor.png').convert('RGB')).astype(np.float32)
+        lum=src.mean(2,keepdims=True)/150.0
+        Image.fromarray(np.clip(HAIR_RGB*0.75*lum,0,255).astype(np.uint8)).save(OUT+'T_Hero_Brow.png')
+        n.image=bpy.data.images.load(OUT+'T_Hero_Brow.png'); bm_.name='M_HeroBrow'; print('brow tinted')
 headw=body.vertex_groups['Head'].index
 mwb=body.matrix_world
-bm=bmesh.new()
 def headweight(v):
     for g in v.groups:
         if g.group==headw: return g.weight
@@ -166,7 +232,8 @@ def headweight(v):
 def in_hair(p):
     if abs(p.x)>0.075 and p.z<1.715 and p.y<0.03: return False   # ears / temples
     return p.z>1.752 or (p.z>1.70 and p.y>-0.02) or (p.z>1.60 and p.y>0.045)
-# --- hair mass: offset shell of the scalp ---
+# --- shell (opaque hair mass on the scalp) ---
+bm=bmesh.new(); uvl=bm.loops.layers.uv.new('UVMap')
 sbm=bmesh.new(); sbm.from_mesh(body.data)
 vmap={}
 for f in sbm.faces:
@@ -176,75 +243,79 @@ for f in sbm.faces:
     for v in f.verts:
         if v.index not in vmap:
             p=mwb@v.co; n=(mwb.to_3x3()@v.normal).normalized()
-            off=0.016 if p.z>1.74 else 0.01
-            vmap[v.index]=bm.verts.new(p+n*off)
+            vmap[v.index]=bm.verts.new(p+n*(0.009 if p.z>1.74 else 0.006))
         vs.append(vmap[v.index])
-    try: bm.faces.new(vs)
-    except: pass
+    try:
+        nf=bm.faces.new(vs); nf.material_index=1
+        for lp in nf.loops:
+            q=lp.vert.co
+            lp[uvl].uv=((math.atan2(q.x,q.y-0.02)/(2*math.pi)+0.5)*3.0, 1.0-(1.87-q.z)/0.32)
+    except Exception: pass
 sbm.free()
-def strand(p,n,dirv,L,w0,t0,seg=6,curl=0.0,droop=0.25):
-    side=n.cross(dirv)
-    if side.length<1e-4: side=Vector((1,0,0))
-    side.normalize(); up=dirv.cross(side).normalized()
-    g=Vector((0,0,-1)); rings=[]
-    for i in range(seg+1):
-        t=i/seg
-        c=p-n*0.01+dirv*L*t+g*(t*t)*L*droop+side*curl*t*t*L
-        k=(1-t)**0.9
-        w=w0*k+0.0012; th=t0*k+0.0008
-        rings.append([bm.verts.new(c+side*w), bm.verts.new(c+up*th), bm.verts.new(c-side*w), bm.verts.new(c-up*th)])
-    for i in range(seg):
-        A,B=rings[i],rings[i+1]
-        for j in range(4):
-            try: bm.faces.new((A[j],A[(j+1)%4],B[(j+1)%4],B[j]))
-            except: pass
-    tip=bm.verts.new(p-n*0.01+dirv*L*1.06+g*L*droop+side*curl*L)
-    for j in range(4):
-        try: bm.faces.new((rings[-1][j],rings[-1][(j+1)%4],tip))
-        except: pass
 inv=body.matrix_world.inverted()
 def surf(o,d):
     ok,loc,n,fi=body.ray_cast(inv@Vector(o),(inv.to_3x3()@Vector(d)).normalized())
     if not ok: return None
     return body.matrix_world@loc,(body.matrix_world.to_3x3()@n).normalized()
-# scalp roots via rays from many directions around the skull
+def card(p,n,dirv,L,w,seg=7,curl=0.0,droop=0.25,lift=0.006,uoff=None):
+    side=n.cross(dirv)
+    if side.length<1e-4: side=Vector((1,0,0))
+    side.normalize(); g=Vector((0,0,-1))
+    uo=random.uniform(0,0.6) if uoff is None else uoff; uw=0.4
+    rows=[]
+    for i in range(seg+1):
+        t=i/seg
+        c=p+n*lift+dirv*L*t+g*(t*t)*L*droop+side*curl*t*t*L
+        ww=w*(1-0.5*t)
+        rows.append((bm.verts.new(c-side*ww), bm.verts.new(c+n*ww*0.22), bm.verts.new(c+side*ww)))
+    for i in range(seg):
+        A,B=rows[i],rows[i+1]
+        for j in range(2):
+            f=bm.faces.new((A[j],A[j+1],B[j+1],B[j])); f.material_index=0; f.smooth=True
+            u0,u1=uo+uw*j*0.5,uo+uw*(j+1)*0.5; v0,v1=1-i/seg,1-(i+1)/seg
+            for lp,(u,v) in zip(f.loops,((u0,v0),(u1,v0),(u1,v1),(u0,v1))): lp[uvl].uv=(u,v)
 HC=Vector((0,0.02,1.70))
-roots=[]
-for i in range(900):
-    u=random.random()*2*math.pi; v=random.uniform(-0.35,1.0)
-    d=Vector((math.cos(u)*math.sqrt(1-v*v),math.sin(u)*math.sqrt(1-v*v),v))
-    r=surf(HC+d*0.4,-d)
-    if not r: continue
-    p,n=r
-    if not in_hair(p) or p.z<1.62: continue
-    if all((p-q).length>0.022 for q,_ in roots): roots.append((p,n))
-print('roots',len(roots))
-for (p,n) in roots:
+def roots(spacing, tries=1600):
+    out=[]
+    for i in range(tries):
+        u=random.random()*2*math.pi; v=random.uniform(-0.35,1.0)
+        d=Vector((math.cos(u)*math.sqrt(1-v*v),math.sin(u)*math.sqrt(1-v*v),v))
+        r=surf(HC+d*0.4,-d)
+        if not r: continue
+        p,n=r
+        if not in_hair(p) or p.z<1.62: continue
+        if all((p-q).length>spacing for q,_ in out): out.append((p,n))
+    return out
+def flow(p,n,jit):
+    if p.y<-0.02 and p.z>1.76:  return (n*0.55+Vector((0,-0.15,0.55))+jit).normalized(), 0.55
+    if n.z>0.6:                 return (n*0.55+Vector((0,0.8,0.15))+jit).normalized(), 0.32
+    if p.y>0.03:                return (n*0.35+Vector((0,0.35,-0.85))+jit).normalized(), 0.2
+    return (n*0.25+Vector((0,0.12,-1.0))+jit*0.7).normalized(), 0.12
+random.seed(11)
+# inner layer: lies close to the scalp, gives volume
+for (p,n) in roots(0.022):
+    jit=Vector((random.uniform(-1,1),random.uniform(-1,1),random.uniform(-1,1)))*0.15
+    d,dr=flow(p,n,jit); d=(d*0.7+(d-n*d.dot(n)).normalized()*0.3).normalized()
+    card(p,n,d,random.uniform(0.06,0.09),random.uniform(0.032,0.042),6,random.uniform(-0.2,0.2),dr+0.15,0.004)
+# outer layer: messy, slightly spiky clumps
+for (p,n) in roots(0.026):
     jit=Vector((random.uniform(-1,1),random.uniform(-1,1),random.uniform(-1,1)))*0.25
-    if p.y<-0.02 and p.z>1.76:                 # front top: spikes forward-up
-        d=(n*0.7+Vector((0,-0.2,0.6))+jit).normalized(); L=random.uniform(0.07,0.1); w=random.uniform(0.024,0.034); dr=0.6
-    elif n.z>0.6:                               # crown
-        d=(n*0.8+Vector((0,0.7,0.25))+jit).normalized(); L=random.uniform(0.08,0.12); w=random.uniform(0.026,0.038); dr=0.3
-    elif p.y>0.03:                              # back: down and out
-        d=(n*0.55+Vector((0,0.35,-0.8))+jit).normalized(); L=random.uniform(0.08,0.12); w=random.uniform(0.024,0.034); dr=0.2
-    else:                                       # sides over the ears
-        d=(n*0.4+Vector((0,0.1,-1.0))+jit*0.7).normalized(); L=random.uniform(0.07,0.1); w=random.uniform(0.022,0.03); dr=0.1
-    strand(p,n,d,L,w,w*0.38,6,random.uniform(-0.3,0.3),dr)
-# fringe: wide clumps from the hairline, falling over the forehead and the right eye
-for row,(zz,cnt,Lr) in enumerate([(1.80,15,(0.11,0.15)),(1.775,13,(0.09,0.12))]):
+    d,dr=flow(p,n,jit)
+    card(p,n,d,random.uniform(0.08,0.125),random.uniform(0.026,0.04),7,random.uniform(-0.35,0.35),dr,0.010)
+# fringe: two rows of cards falling over the forehead, swept over the right eye
+for row,(zz,cnt,Lr) in enumerate([(1.80,14,(0.11,0.15)),(1.778,12,(0.09,0.12))]):
     for i in range(cnt):
         x=-0.08+i*(0.16/(cnt-1))+random.uniform(-0.004,0.004)
         r=surf((x,-0.4,zz+random.uniform(-0.006,0.006)),(0,1,0))
         if not r: continue
         p,n=r
         side=-0.45+0.25*(x/0.08)*(-1 if x<0 else 0.4)
-        d=(Vector((side,-0.42 - row*0.1,-1.0))+Vector((random.uniform(-0.12,0.12),0,0))).normalized()
+        d=(Vector((side,-0.42-row*0.1,-1.0))+Vector((random.uniform(-0.12,0.12),0,0))).normalized()
         L=random.uniform(*Lr)*(1.0 if x<0.03 else 0.8)
-        strand(p+n*(0.022+row*0.008),n,d,L,random.uniform(0.022,0.03),0.009,7,random.uniform(-0.15,0.15),0.1)
+        card(p+n*(0.016+row*0.006),n,d,L,random.uniform(0.022,0.03),7,random.uniform(-0.15,0.15),0.1,0.004)
 hm=bpy.data.meshes.new('Hair'); bm.to_mesh(hm); bm.free()
 hair=bpy.data.objects.new('Hair',hm); bpy.context.scene.collection.objects.link(hair)
-hm.materials.append(hair_mat)
-for p in hm.polygons: p.use_smooth=True
+hm.materials.append(hair_mat); hm.materials.append(hair_base)
 hair.parent=arm
 vg=hair.vertex_groups.new(name='Head'); vg.add(list(range(len(hm.vertices))),1.0,'REPLACE')
 md=hair.modifiers.new('Armature','ARMATURE'); md.object=arm
@@ -298,3 +369,7 @@ render(OUT+'prev_full.png')
 bpy.data.objects['Cam'].location=(0.25,-0.75,1.68)
 c=bpy.data.objects['Cam']; d=Vector((0,0,1.68))-c.location; c.rotation_euler=d.to_track_quat('-Z','Y').to_euler(); c.data.lens=50
 render(OUT+'prev_head.png')
+c.location=(-0.45,0.6,1.85); d=Vector((0,0,1.7))-c.location; c.rotation_euler=d.to_track_quat('-Z','Y').to_euler()
+render(OUT+'prev_head_back.png')
+c.location=(0.7,-0.1,1.72); d=Vector((0,0,1.7))-c.location; c.rotation_euler=d.to_track_quat('-Z','Y').to_euler()
+render(OUT+'prev_head_side.png')

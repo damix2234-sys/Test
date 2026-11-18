@@ -1,5 +1,6 @@
 import sys; sys.path.insert(0, '/tmp/claude-0/-home-user-Test/f99a113e-eb26-5643-ae8a-066cde7aded7/scratchpad/bl')
-from rig import *
+from rig2 import *
+import rig2
 import os
 HAIR=X+'Universal Base Characters[Standard]/Hairstyles/Rigged to Head Bone/glTF (Godot -Unreal)/'
 
@@ -31,8 +32,8 @@ def build(name, base, bodyname, zcut, outfit_files, hair_files, sword=False):
     for h in hair_files:
         for o in attach(arm, HAIR+h+'.gltf'): o.name=h
     if sword:
-        build_sword(arm)
-        for m in ('M_Steel',): bpy.data.materials[m].node_tree.nodes['Principled BSDF'].inputs['Base Color'].default_value=(0.5,0.5,0.52,1)
+        compute_edge(arm)
+        build_sword(arm, steel_col=(0.55, 0.55, 0.57))
     decimate_heavy(2200,0.4,skip=('Sword',))
     for im in bpy.data.images:
         if im.size[0]>1024: im.scale(1024,1024)
@@ -41,7 +42,7 @@ def build(name, base, bodyname, zcut, outfit_files, hair_files, sword=False):
             while len(o.data.uv_layers)>1: o.data.uv_layers.remove(o.data.uv_layers[1])
     print(name, 'tris', sum(len(o.data.polygons) for o in bpy.data.objects if o.type=='MESH'))
     bpy.ops.export_scene.gltf(filepath=OUT+name+'.glb', export_format='GLB', export_animations=False,
-        export_image_format='JPEG', export_jpeg_quality=80, export_yup=True, export_def_bones=True)
+        export_image_format='JPEG', export_jpeg_quality=82, export_yup=True, export_def_bones=True)
     print(name,'MB',os.path.getsize(OUT+name+'.glb')/1e6)
     if '--render' in sys.argv:
         setup_render(400,600,8); camera((1.0,-2.6,1.4),(0,0,1.0),40); render(OUT+'npc_'+name+'.png')

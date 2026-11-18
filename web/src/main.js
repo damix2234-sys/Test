@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { buildWorld, heightAt, LOC, forestness, windowMat, glowMats, WORLD_HALF } from './world.js';
 import { makeHumanoid, makeQuad, animHumanoid, animQuad } from './characters.js';
 import { SFX, initAudio, musicTick, setMusic } from './audio.js';
-import { loadGLB, prepareModel, Animator, attachToBone, findBone, cleanClips, makeRig, makeQuadRig } from './animator.js';
+import { loadGLB, prepareModel, Animator, attachToBone, findBone, findNode, cleanClips, makeRig, makeQuadRig, PropDrop, setEnvIntensity } from './animator.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
 // ================= utilities =================
 const $ = id => document.getElementById(id);
@@ -63,6 +64,8 @@ scene.background = new THREE.Color(0x87bfe8);
 scene.fog = new THREE.Fog(0x87bfe8, 50, quality === 'low' ? 150 : 200);
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 420);
 
+// image-based lighting for the PBR characters (procedural room environment, scaled with daylight)
+{ const pm = new THREE.PMREMGenerator(renderer); scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture; pm.dispose(); }
 const hemi = new THREE.HemisphereLight(0xcfe6ff, 0x5a6a3a, 1.0);
 scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff0d8, 2.0);
@@ -181,12 +184,13 @@ const P = {
 // ---- detailed rigged hero model (GLB) ----
 const HERO_SCALE = 1.12;
 let heroM = null;
+// German longsword combo (Liechtenauer): each technique starts where the previous one ended; contact frame at 30 fps
 const ATK = [
-  { clip: 'Hema_Zornhau', hit: 0.33, len: 1.2, name: 'Zornhau' },
-  { clip: 'Hema_Zwerchhau', hit: 0.36, len: 1.2, name: 'Zwerchhau' },
-  { clip: 'Hema_Scheitelhau', hit: 0.38, len: 1.4, name: 'Scheitelhau' },
+  { clip: 'Hema_Zornhau', rec: 'Hema_Zornhau_Rec', hit: 16 / 30, name: 'Zornhau', dmg: 1.0 },
+  { clip: 'Hema_Zwerchhau', rec: 'Hema_Zwerchhau_Rec', hit: 13 / 30, name: 'Zwerchhau', dmg: 1.15 },
+  { clip: 'Hema_Scheitelhau', rec: 'Hema_Scheitelhau_Rec', hit: 15 / 30, name: 'Scheitelhau', dmg: 1.7 },
 ];
-const ATK_SPEED = 1.6, ATK_END = 0.72, ROLL_T = 0.55;
+const ATK_SPEED = 1.2, ATK_END = 0.72, ROLL_T = 0.55;
 let RIG = null;
 Promise.all(['hero', 'npc_bandit', 'npc_man', 'npc_woman', 'fox'].map(loadGLB)).then(([gltf, bandit, man, woman, foxG]) => {
   const clips = cleanClips(gltf.animations);
@@ -194,7 +198,7 @@ Promise.all(['hero', 'npc_bandit', 'npc_man', 'npc_woman', 'fox'].map(loadGLB)).
   { const r = makeQuadRig(foxG, { length: 1.05 }); scene.remove(fox.mesh.group); fox.mesh = r; scene.add(r.group); }
   const root = prepareModel(gltf.scene, { scale: HERO_SCALE });
   scene.add(root);
-  const anim = new Animator(root, clips, { idle: 'Hema_Guard', walkSpeed: 1.5 * HERO_SCALE, jogSpeed: 4.0 * HERO_SCALE });
+  const anim = new Animator(root, clips, {});
   // halo & horns follow the head bone
   const h = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.022, 6, 20), haloMat);
   attachToBone(root, 'Head', h, new THREE.Vector3(0, 1.97, -0.01), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
@@ -204,7 +208,10 @@ Promise.all(['hero', 'npc_bandit', 'npc_man', 'npc_woman', 'fox'].map(loadGLB)).
   root.add(aura); aura.scale.setScalar(1 / HERO_SCALE);
   let steel = null, skin = null;
   root.traverse(o => { if (o.material) { if (o.material.name === 'M_Steel') steel = o.material; if (o.material.name === 'M_HeroSkin') skin = o.material; } });
-  heroM = { root, anim, halo: h, horns: hg, steel, skin };
+  const flask = findNode(root, 'Flask'); if (flask) flask.visible = false;
+  const wb = findBone(root, 'weapon_r');
+  heroM = { root, anim, halo: h, horns: hg, steel, skin, flask, drop: new PropDrop(root, 'weapon_r'),
+    wbind: wb ? { p: wb.position.clone(), q: wb.quaternion.clone(), s: wb.scale.clone() } : null, handL: findBone(root, 'hand_l') };
   root.position.copy(P.pos); root.rotation.y = P.yaw; anim.update(0.016, 0);
   hero.group.visible = false;
   refreshHeroLook();
@@ -305,7 +312,7 @@ class Enemy {
     for (const m of this.mesh.mats) {
       if (m.userData.baseE === undefined) m.userData.baseE = m.emissive.getHex();
       if (w > 0) m.emissive.setRGB(w, w, w);
-      else if (r > 0) m.emissive.setRGB(r * 0.6, 0, 0);
+      else if (r > 0) m.emissive.setRGB(r * 0.28, r * 0.02, 0);
       else m.emissive.setHex(m.userData.baseE);
     }
   }
@@ -314,7 +321,7 @@ class Enemy {
     if (this.dead) {
       this.deadT += dt;
       const k = Math.min(1, this.deadT * 2.5);
-      if (this.mesh.kind === 'rig') this.mesh.anim.update(dt, 0);
+      if (this.mesh.kind === 'rig') { this.mesh.anim.timeScale = 1; this.mesh.anim.update(dt, 0); if (this.mesh.drop) this.mesh.drop.update(dt, this.pos.y); }
       else if (this.mesh.kind === 'quad' || this.mesh.kind === 'qrig') g.rotation.z = k * Math.PI / 2; else g.rotation.x = -k * Math.PI / 2;
       if (this.deadT > 1.8) g.position.y -= dt * 0.7;
       if (this.deadT > 3.2) this.remove = true;
@@ -333,6 +340,7 @@ class Enemy {
       this.yaw = turnTo(this.yaw, toP, dt * 3);
       g.position.copy(this.pos); g.rotation.y = this.yaw;
       animChar(this.mesh, dt, 0, -1, { kneel: true });
+      if (this.mesh.drop) this.mesh.drop.update(dt, this.pos.y);
       return;
     }
     if (this.state === 'leaving') {
@@ -383,7 +391,15 @@ class Enemy {
       }
       case 'recover':
         this.t += dt; atkAnim = 0.35 + Math.min(1, this.t / 0.45) * 0.65;
-        if (this.t > 0.45) { this.state = 'chase'; this.atkCd = def.cd * rand(0.8, 1.3); }
+        if (this.mesh.kind === 'rig' && this.atk) {
+          const at = this.atk;
+          if (!at.recStarted && at.t >= at.end - 0.015) {
+            at.recStarted = true;
+            if (at.rec) { this.mesh.anim.play(at.rec, { speed: 1.1, fadeIn: 0.05, fadeOut: 0.25 }); at.recEnd = at.t + this.mesh.anim.duration(at.rec) / 1.1; }
+            else at.recEnd = at.t;
+          }
+          if (at.recStarted && at.t >= at.recEnd - 0.2) { this.state = 'chase'; this.atkCd = def.cd * rand(0.8, 1.3); this.atk = null; }
+        } else if (this.t > 0.45) { this.state = 'chase'; this.atkCd = def.cd * rand(0.8, 1.3); }
         break;
       case 'return': {
         const hx = this.home.x - this.pos.x, hz = this.home.z - this.pos.z;
@@ -417,6 +433,18 @@ class Enemy {
     g.position.copy(this.pos); g.rotation.y = this.yaw;
     if (this.mesh.kind === 'qrig') this.mesh.update(dt, this.speed, atkAnim);
     else if (this.mesh.kind === 'quad') animQuad(this.mesh, dt, this.speed, atkAnim);
+    else if (this.mesh.kind === 'rig') {
+      if (this.atk) this.atk.t += dt;
+      this.hitstop = Math.max(0, (this.hitstop || 0) - dt);
+      const an = this.mesh.anim; an.timeScale = this.hitstop > 0 ? 0.08 : 1;
+      const busy = this.state === 'windup' || this.state === 'recover';
+      const rm = an.update(dt, busy ? 0 : this.speed / this.mesh.scale * 1.12);
+      if (rm.x || rm.z) {
+        const sc = this.mesh.group.scale.x, cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
+        moveEntity(this.pos, (rm.x * cy + rm.z * sy) * sc, (-rm.x * sy + rm.z * cy) * sc, def.radius);
+        g.position.copy(this.pos);
+      }
+    }
     else animChar(this.mesh, dt, this.state === 'windup' || this.state === 'recover' ? 0 : this.speed, atkAnim);
     // ghouls burn at daylight
     if (this.type === 'ghoul' && dayK > 0.75 && this.tag === 'wild') {
@@ -425,15 +453,20 @@ class Enemy {
     }
   }
   startAttackAnim() {
-    // historical longsword techniques; clip time to the moment of contact (seconds at normal speed)
-    const T = { Hema_Zornhau: 0.40, Hema_Zwerchhau: 0.433, Hema_Scheitelhau: 0.533, Hema_Stich: 0.367 };
+    // historical longsword techniques from the guard; contact frame (s) and the matching recovery to the guard
+    const TECH = {
+      Hema_Zornhau: { hit: 16 / 30, rec: 'Hema_Zornhau_Rec' }, Hema_Zwerchhau_G: { hit: 13 / 30, rec: 'Hema_Zwerchhau_Rec' },
+      Hema_Scheitelhau_G: { hit: 15 / 30, rec: 'Hema_Scheitelhau_Rec' }, Hema_Stich: { hit: 10 / 30, rec: null },
+    };
     let clip;
-    if (this.type === 'boss') clip = this.slamPhase ? 'Hema_Scheitelhau' : pick(['Hema_Zwerchhau', 'Hema_Zornhau']);
-    else if (this.type === 'leader') clip = pick(['Hema_Zornhau', 'Hema_Scheitelhau', 'Hema_Zwerchhau']);
-    else if (this.type === 'ghoul') clip = pick(['Hema_Zornhau', 'Hema_Scheitelhau']);
-    else clip = pick(['Hema_Zornhau', 'Hema_Zwerchhau', 'Hema_Stich']);
-    const wu = this.slamPhase ? 1.1 : this.def.windup;
-    this.mesh.anim.play(clip, { speed: T[clip] / wu, fadeIn: 0.12, fadeOut: 0.35 });
+    if (this.type === 'boss') clip = this.slamPhase ? 'Hema_Scheitelhau_G' : pick(['Hema_Zwerchhau_G', 'Hema_Zornhau']);
+    else if (this.type === 'leader') clip = pick(['Hema_Zornhau', 'Hema_Scheitelhau_G', 'Hema_Zwerchhau_G', 'Hema_Stich']);
+    else if (this.type === 'ghoul') clip = pick(['Hema_Zornhau', 'Hema_Scheitelhau_G']);
+    else clip = pick(['Hema_Zornhau', 'Hema_Zwerchhau_G', 'Hema_Stich']);
+    const tech = TECH[clip], wu = this.slamPhase ? 1.1 : this.def.windup;
+    const speed = Math.min(1.5, Math.max(0.42, tech.hit / wu));
+    this.mesh.anim.play(clip, { speed, fadeIn: 0.12, fadeOut: 0.3, auto: !tech.rec });
+    this.atk = { t: 0, end: this.mesh.anim.duration(clip) / speed, rec: tech.rec, recEnd: 0, recStarted: false };
   }
   strike(d, toP) {
     const def = this.def;
@@ -479,10 +512,15 @@ function damageEnemy(e, dmg, crit, nx, nz, kb) {
   floatText((crit ? '' : '') + dmg, e.pos.x, e.pos.y + 2.2 * (e.type === 'boss' ? 2 : 1), e.pos.z, crit ? 'crit' : 'dmg', 0.9);
   burst(e.pos.x, e.pos.y + 1.2, e.pos.z, e.type === 'ghoul' ? 0x88ffaa : e.type === 'boss' ? 0xff6a1a : 0xaa1a1a, crit ? 10 : 5, 3, 2.5, 0.45);
   if (e.state === 'idle' || e.state === 'return') e.state = 'chase';
-  if (e.mesh.kind === 'rig' && e.state !== 'windup' && e.type !== 'boss' && e.hp > 0) e.mesh.anim.play('Hit', { speed: 1.6, fadeIn: 0.04, fadeOut: 0.15 });
+  if (e.mesh.kind === 'rig') e.hitstop = 0.07;
+  if (e.mesh.kind === 'rig' && e.state !== 'windup' && e.type !== 'boss' && e.hp > 0) {
+    e.mesh.anim.play(e.mesh.armed ? 'Hema_Hit' : 'Hit', { speed: 1.3, fadeIn: 0.04, fadeOut: 0.18 });
+    if (e.state === 'recover') { e.state = 'chase'; e.atk = null; e.atkCd = Math.max(e.atkCd, 0.5); }
+  }
   targetEnemy = e; targetT = 5;
   if (e.type === 'leader' && !S.flags.leaderFate && e.hp < e.maxHp * 0.25) {
     e.hp = Math.ceil(e.maxHp * 0.25); e.state = 'surrender'; e.wind = 0; e.flash = 0; e.setFlash();
+    if (e.mesh.kind === 'rig' && e.mesh.drop) { e.mesh.anim.stopAll(); e.mesh.drop.start(); }
     toast('Wronisław rzuca miecz i błaga o litość! Podejdź, by zdecydować o jego losie.', 'q', 5);
     SFX.quest();
     return;
@@ -492,7 +530,7 @@ function damageEnemy(e, dmg, crit, nx, nz, kb) {
 function killEnemy(e, silent = false) {
   if (e.dead) return;
   e.dead = true; e.deadT = 0; e.hp = 0; e.flash = 0; e.wind = 0; e.setFlash();
-  if (e.mesh.kind === 'rig') e.mesh.anim.play('Death', { hold: true, fadeIn: 0.08 });
+  if (e.mesh.kind === 'rig') { e.mesh.anim.play('Death', { hold: true, fadeIn: 0.08 }); if (e.mesh.drop) e.mesh.drop.start(); }
   if (slamRingOwner === e) hideSlamRing();
   if (silent) { e.remove = true; return; }
   S.kills++;
@@ -534,14 +572,22 @@ function shake(a) { shakeAmt = Math.max(shakeAmt, a); }
 let hurtFlash = 0;
 function hurtPlayer(dmg, src, kb = 4) {
   if (P.dead || P.invuln > 0 || P.rollT > 0 || paused) return;
+  if (P.act && P.act.kind === 'dodge' && P.act.t > P.act.inv0 && P.act.t < P.act.inv1) return;
   dmg = Math.round(dmg * ARMORS[S.armor].mul * rand(0.9, 1.1));
   P.hp -= dmg; P.invuln = 0.3; P.lastHurt = clock.elapsedTime;
   hurtFlash = 1; SFX.hurt(); shake(0.25);
   floatText('-' + dmg, P.pos.x, P.pos.y + 2.2, P.pos.z, 'hurt', 0.9);
   if (src) { const dx = P.pos.x - src.pos.x, dz = P.pos.z - src.pos.z, d = Math.hypot(dx, dz) || 1; P.kvx = dx / d * kb; P.kvz = dz / d * kb; }
   if (P.attackT >= 0 && Math.random() < 0.4) { P.attackT = -1; }
-  if (heroM && P.attackT < 0 && P.hp > 0) heroM.anim.play('Hit', { speed: 1.4, fadeIn: 0.05, fadeOut: 0.15 });
-  if (P.hp <= 0) { P.hp = 0; P.dead = true; P.deadT = 0; SFX.death(); }
+  if (heroM && P.hp > 0) {
+    const k = P.act ? P.act.kind : null;
+    const interrupt = !k || k === 'rec' || k === 'hit' || (k === 'attack' && !P.act.hitDone && Math.random() < 0.35);
+    if (interrupt) heroAction('hit', 'Hema_Hit', 1.15, { fadeIn: 0.05, fadeOut: 0.2 });
+  }
+  if (P.hp <= 0) {
+    P.hp = 0; P.dead = true; P.deadT = 0; SFX.death();
+    if (heroM) { P.act = null; heroM.anim.play('Death', { hold: true, fadeIn: 0.12 }); heroM.drop.start(); }
+  }
 }
 function respawn() {
   $('death').style.display = 'none';
@@ -549,7 +595,11 @@ function respawn() {
   S.xp -= lost; S.scars++;
   P.dead = false; P.hp = maxHp(); P.mana = maxMana();
   P.pos.set(0, 2.5, 9); hero.group.rotation.set(0, 0, 0);
-  if (heroM) heroM.anim.stopAll();
+  if (heroM) {
+    heroM.anim.stopAll(); heroM.drop.stop(); P.act = null;
+    const wb = findBone(heroM.root, 'weapon_r');
+    if (wb && heroM.wbind) { wb.position.copy(heroM.wbind.p); wb.quaternion.copy(heroM.wbind.q); wb.scale.copy(heroM.wbind.s); }
+  }
   fox.pos.set(2, 2.5, 11);
   for (const e of enemies) if (!e.dead && e.state !== 'surrender') { e.state = 'return'; e.hp = e.maxHp; }
   refreshHeroLook();
@@ -603,8 +653,17 @@ const boltCore = new THREE.MeshBasicMaterial({ color: 0xffffff });
 function castSpell() {
   if (P.dead || paused) return;
   if (P.mana < 20) { toast('Za mało many!', 'g', 1.5); return; }
+  if (heroM) {
+    if (P.act && P.act.lock) return;
+    P.mana -= 20;
+    const tg = spellTarget(); if (tg) P.yaw = Math.atan2(tg.pos.x - P.pos.x, tg.pos.z - P.pos.z);
+    heroAction('cast', 'Hema_Cast', 1.25, { fadeIn: 0.08, fadeOut: 0.25 });
+    return;
+  }
   P.mana -= 20; P.castT = 0.4;
-  if (heroM && P.attackT < 0) heroM.anim.play('Cast', { speed: 1.2, fadeIn: 0.06 });
+  fireSpell();
+}
+function spellTarget() {
   let best = null, bd = 1e9;
   for (const e of enemies) {
     if (e.dead || e.state === 'surrender' || e.state === 'leaving') continue;
@@ -613,10 +672,22 @@ function castSpell() {
     const score = d + a * 12;
     if (score < bd) { bd = score; best = e; }
   }
-  if (best) P.yaw = Math.atan2(best.pos.x - P.pos.x, best.pos.z - P.pos.z);
+  return best;
+}
+function fireSpell() {
+  let best = null, bd = 1e9;
+  for (const e of enemies) {
+    if (e.dead || e.state === 'surrender' || e.state === 'leaving') continue;
+    const d = dist2(e.pos, P.pos); if (d > 26) continue;
+    const a = Math.abs(angDiff(Math.atan2(e.pos.x - P.pos.x, e.pos.z - P.pos.z), P.yaw));
+    const score = d + a * 12;
+    if (score < bd) { bd = score; best = e; }
+  }
+  if (best && !heroM) P.yaw = Math.atan2(best.pos.x - P.pos.x, best.pos.z - P.pos.z);
   const m = new THREE.Mesh(boltGeo, boltMat);
   const core = new THREE.Mesh(boltGeo, boltCore); core.scale.setScalar(0.5); m.add(core);
   m.position.set(P.pos.x + Math.sin(P.yaw) * 0.8, P.pos.y + 1.5, P.pos.z + Math.cos(P.yaw) * 0.8);
+  if (heroM && heroM.handL) { heroM.root.updateMatrixWorld(true); heroM.handL.getWorldPosition(m.position); m.position.addScaledVector(new THREE.Vector3(Math.sin(P.yaw), 0, Math.cos(P.yaw)), 0.15); }
   scene.add(m);
   projectiles.push({ m, vx: Math.sin(P.yaw) * 18, vy: 0, vz: Math.cos(P.yaw) * 18, target: best, life: 2.2, dmg: 18 + 12 * S.stats.magia });
   SFX.magic();
@@ -732,44 +803,85 @@ function nearestEnemy(maxD) {
   }
   return best;
 }
-function doAttack() {
-  if (P.dead || paused || P.rollT > 0) return;
-  if (P.attackT >= 0) { if (P.attackT > ATK[P.combo].hit - 0.2) P.comboQ = true; return; }
-  startAttack();
+// ---------------- hero actions (GLB rig: real clips + root motion; fallback: procedural) ----------------
+function heroAction(kind, clip, speed, o = {}) {
+  heroM.anim.play(clip, { speed, fadeIn: o.fadeIn ?? 0.1, fadeOut: o.fadeOut ?? 0.25, auto: o.auto !== false });
+  P.act = Object.assign({ kind, clip, t: 0, speed, dur: heroM.anim.duration(clip) / speed, lock: true }, o.extra || {});
+  return P.act;
 }
-function startAttack() {
-  P.combo = (P.comboTimer > 0 || P.attackT >= 0) ? (P.combo + 1) % 3 : 0;
+function doAttack() {
+  if (P.dead || paused) return;
+  if (!heroM) {
+    if (P.rollT > 0) return;
+    if (P.attackT >= 0) { P.comboQ = true; return; }
+    legacyAttack(); return;
+  }
+  const a = P.act;
+  if (a && a.kind === 'attack') { if (a.i < 2) a.queued = true; return; }
+  if (a && a.lock && a.kind !== 'hit') return;
+  startAttack(0, false);
+}
+function legacyAttack() {
+  P.combo = P.comboTimer > 0 ? (P.combo + 1) % 3 : 0;
   P.attackT = 0; P.atkHit = false; P.comboQ = false; P.swung = false;
   const t = nearestEnemy(5.5);
   if (t) P.yaw = Math.atan2(t.pos.x - P.pos.x, t.pos.z - P.pos.z);
-  if (heroM) heroM.anim.play(ATK[P.combo].clip, { speed: ATK_SPEED, fadeIn: 0.09, fadeOut: 0.3 });
 }
-function meleeHit() {
+function startAttack(i, chained) {
+  const A = ATK[i];
+  const t = nearestEnemy(6.5);
+  if (t) P.yaw = Math.atan2(t.pos.x - P.pos.x, t.pos.z - P.pos.z);
+  heroAction('attack', A.clip, ATK_SPEED, { fadeIn: chained ? 0.07 : 0.12, auto: false, extra: { i, hitDone: false, swung: false, queued: false } });
+  P.combo = i;
+}
+function meleeHit(A) {
   const base = SWORDS[S.sword].dmg + 5 * S.stats.sila;
+  const mult = A ? A.dmg : (P.combo === 2 ? 1.6 : 1);
+  const heavy = A ? A.name === 'Scheitelhau' : P.combo === 2;
   let hitAny = false;
   for (const e of enemies) {
     if (e.dead || e.state === 'surrender' || e.state === 'leaving') continue;
     const dx = e.pos.x - P.pos.x, dz = e.pos.z - P.pos.z, d = Math.hypot(dx, dz);
-    if (d > 2.75 + e.def.radius) continue;
-    if (Math.abs(angDiff(Math.atan2(dx, dz), P.yaw)) > 1.25 && d > 1.2) continue;
-    let dmg = base * (P.combo === 2 ? 1.6 : 1) * rand(0.9, 1.1);
+    if (d > 2.9 + e.def.radius) continue;
+    if (Math.abs(angDiff(Math.atan2(dx, dz), P.yaw)) > 1.2 && d > 1.2) continue;
+    let dmg = base * mult * rand(0.9, 1.1);
     const crit = Math.random() < 0.06 + 0.05 * S.stats.zrecznosc;
     if (crit) dmg *= 2;
-    damageEnemy(e, dmg, crit, dx / (d || 1), dz / (d || 1), P.combo === 2 ? 8 : 4);
+    damageEnemy(e, dmg, crit, dx / (d || 1), dz / (d || 1), heavy ? 7 : 3.5);
     hitAny = true;
     if (crit) SFX.crit();
   }
-  if (hitAny) { SFX.hit(); shake(P.combo === 2 ? 0.25 : 0.12); }
+  if (hitAny) { SFX.hit(); shake(heavy ? 0.25 : 0.12); P.hitstop = heavy ? 0.09 : 0.06; }
 }
 function doRoll() {
   if (P.dead || paused || P.rollCd > 0) return;
+  if (heroM) {
+    if (P.act && (P.act.kind === 'drink' || P.act.kind === 'interact' || P.act.kind === 'dodge')) return;
+    const mv = moveVector(), tgt = nearestEnemy(8);
+    let clip = 'Hema_Dodge_Back';
+    if (tgt) {
+      P.yaw = Math.atan2(tgt.pos.x - P.pos.x, tgt.pos.z - P.pos.z);
+      if (mv.m > 0.2) {
+        const rel = angDiff(Math.atan2(mv.x, mv.z), P.yaw);
+        if (Math.abs(rel) > 2.3) clip = 'Hema_Dodge_Back';
+        else if (Math.abs(rel) < 0.6) clip = Math.random() < 0.5 ? 'Hema_Dodge_Left' : 'Hema_Dodge_Right';
+        else clip = rel > 0 ? 'Hema_Dodge_Left' : 'Hema_Dodge_Right';
+      }
+    } else {
+      if (mv.m > 0.2) P.yaw = Math.atan2(mv.x, mv.z);
+      clip = 'Hema_Dodge_Fwd';
+    }
+    const a = heroAction('dodge', clip, 1.3, { fadeIn: 0.05, fadeOut: 0.2, extra: { inv0: 0.04, inv1: 0.36 } });
+    P.rollCd = a.dur + 0.08;
+    SFX.roll(); burst(P.pos.x, P.pos.y + 0.2, P.pos.z, 0x9a8a6a, 5, 2, 1, 0.4);
+    return;
+  }
   let dx = 0, dz = 0;
   const mv = moveVector();
   if (mv.m > 0.1) { dx = mv.x; dz = mv.z; } else { dx = Math.sin(P.yaw); dz = Math.cos(P.yaw); }
   const d = Math.hypot(dx, dz) || 1;
   P.rollDir = { x: dx / d, z: dz / d }; P.yaw = Math.atan2(dx, dz);
   P.rollT = ROLL_T; P.rollCd = 0.85; P.attackT = -1;
-  if (heroM) heroM.anim.play('Roll', { speed: 1.47 / ROLL_T, fadeIn: 0.05, fadeOut: 0.15 });
   SFX.roll();
   burst(P.pos.x, P.pos.y + 0.2, P.pos.z, 0x9a8a6a, 5, 2, 1, 0.4);
 }
@@ -777,10 +889,69 @@ function drinkPotion() {
   if (P.dead || paused) return;
   if (S.potions <= 0) { toast('Nie masz mikstur. Kup je u kupca Mirka.', '', 2); return; }
   if (P.hp >= maxHp()) { toast('Zdrowie jest pełne.', '', 1.5); return; }
-  S.potions--; const h = 60 + 10 * S.stats.sila; P.hp = Math.min(maxHp(), P.hp + h);
-  if (heroM) heroM.anim.play('Drink', { speed: 1.7, fadeIn: 0.15 });
+  if (heroM) {
+    if (P.act && P.act.lock) return;
+    S.potions--;
+    heroAction('drink', 'Hema_Drink', 1.15, { fadeIn: 0.12, fadeOut: 0.25, extra: { healed: false } });
+    return;
+  }
+  S.potions--; healPotion();
+}
+function healPotion() {
+  const h = 60 + 10 * S.stats.sila; P.hp = Math.min(maxHp(), P.hp + h);
   SFX.drink(); floatText('+' + h, P.pos.x, P.pos.y + 2.2, P.pos.z, 'heal');
   burst(P.pos.x, P.pos.y + 1, P.pos.z, 0xff5050, 10, 2, 3, 0.6);
+}
+function heroInteract(cb) {
+  if (!heroM) { cb(); return; }
+  if (P.act && P.act.lock) return;
+  heroAction('interact', 'Hema_Interact', 1.2, { fadeIn: 0.12, fadeOut: 0.25, extra: { cb, done: false } });
+}
+// per-frame update of the current hero action
+function updateHeroAction(dt, mv) {
+  const a = P.act; if (!a) return;
+  a.t += dt;
+  switch (a.kind) {
+    case 'attack': {
+      const A = ATK[a.i], hitT = A.hit / ATK_SPEED;
+      if (!a.swung && a.t >= hitT - 0.12) { a.swung = true; SFX.swing(); }
+      if (a.t < hitT - 0.06) { const tg = nearestEnemy(6.5); if (tg) P.yaw = turnTo(P.yaw, Math.atan2(tg.pos.x - P.pos.x, tg.pos.z - P.pos.z), dt * 5); }
+      if (!a.hitDone && a.t >= hitT) { a.hitDone = true; meleeHit(A); }
+      if (a.t >= a.dur - 0.015) {
+        if (a.queued && a.i < 2) startAttack(a.i + 1, true);
+        else heroAction('rec', A.rec, 1.1, { fadeIn: 0.04, fadeOut: 0.25, extra: { lock: false } });
+      }
+      break;
+    }
+    case 'rec':
+      if (mv.m > 0.3 && a.t > 0.12) { heroM.anim.release(0.3); P.act = null; }
+      else if (a.t >= a.dur) P.act = null;
+      break;
+    case 'dodge':
+      if (a.t >= a.dur * 0.78) a.lock = false;
+      if (a.t >= a.dur || (!a.lock && mv.m > 0.3)) { if (a.t < a.dur) heroM.anim.release(0.25); P.act = null; }
+      break;
+    case 'cast':
+      if (!a.fired && a.t >= (9 / 30) / a.speed) { a.fired = true; fireSpell(); }
+      if (a.t >= a.dur * 0.8) a.lock = false;
+      if (a.t >= a.dur || (!a.lock && mv.m > 0.3)) { if (a.t < a.dur) heroM.anim.release(0.25); P.act = null; }
+      break;
+    case 'drink': {
+      const f = a.t * a.speed * 30;
+      if (heroM.flask) heroM.flask.visible = f > 6 && f < 44;
+      if (!a.healed && f >= 26) { a.healed = true; healPotion(); }
+      if (a.t >= a.dur) { if (heroM.flask) heroM.flask.visible = false; P.act = null; }
+      break;
+    }
+    case 'interact':
+      if (!a.done && a.t * a.speed * 30 >= 15) { a.done = true; a.cb && a.cb(); }
+      if (a.t >= a.dur) P.act = null;
+      break;
+    case 'hit':
+      if (a.t >= a.dur * 0.7) a.lock = false;
+      if (a.t >= a.dur) P.act = null;
+      break;
+  }
 }
 function moveVector() {
   let mx = input.jx, my = input.jy;
@@ -796,10 +967,43 @@ function moveVector() {
   return { x, z, m };
 }
 
+function updateHeroGLB(dt, mv, speed) {
+  updateHeroAction(dt, mv);
+  const locked = P.act && P.act.lock;
+  let vx = 0, vz = 0;
+  if (!locked && mv.m > 0.05) {
+    if (P.act && P.act.kind === 'rec') { heroM.anim.release(0.3); P.act = null; }
+    vx = mv.x * speed * mv.m; vz = mv.z * speed * mv.m;
+    P.yaw = turnTo(P.yaw, Math.atan2(mv.x, mv.z), dt * 10);
+  }
+  vx += P.kvx; vz += P.kvz;
+  const kd = Math.exp(-8 * dt); P.kvx *= kd; P.kvz *= kd;
+  P.speed = lerp(P.speed, Math.hypot(vx - P.kvx, vz - P.kvz), Math.min(1, dt * 10));
+  // animation (hit-stop slows the pose for a few frames on impact)
+  const r = heroM.root;
+  r.rotation.y = P.yaw;
+  P.hitstop = Math.max(0, (P.hitstop || 0) - dt);
+  heroM.anim.timeScale = P.hitstop > 0 ? 0.08 : 1;
+  const rm = heroM.anim.update(dt, locked ? 0 : P.speed / HERO_SCALE);
+  const sc = r.scale.x, cy = Math.cos(P.yaw), sy = Math.sin(P.yaw);
+  vx += (rm.x * cy + rm.z * sy) * sc / Math.max(dt, 1e-4);
+  vz += (-rm.x * sy + rm.z * cy) * sc / Math.max(dt, 1e-4);
+  moveEntity(P.pos, vx * dt, vz * dt, 0.45);
+  r.position.copy(P.pos); if (P.pos.y < 0) r.position.y = Math.max(P.pos.y, -0.6);
+  // regen
+  P.mana = Math.min(maxMana(), P.mana + dt * (5 + S.stats.magia));
+  if (clock.elapsedTime - P.lastHurt > 6) P.hp = Math.min(maxHp(), P.hp + dt * 2.5);
+  r.visible = !(P.invuln > 0 && Math.floor(P.invuln * 30) % 2 === 0);
+  aura.rotation.z += dt;
+}
 function updatePlayer(dt) {
   if (P.dead) {
     P.deadT += dt;
-    if (heroM) { heroM.anim.update(dt, 0); if (!heroM.anim.isPlaying('Death')) heroM.anim.play('Death', { hold: true, fadeIn: 0.15 }); }
+    if (heroM) {
+      if (!heroM.anim.isPlaying('Death')) { heroM.anim.play('Death', { hold: true, fadeIn: 0.15 }); if (!heroM.drop.active) heroM.drop.start(); }
+      heroM.anim.timeScale = 1; heroM.anim.update(dt, 0);
+      heroM.drop.update(dt, P.pos.y);
+    }
     else hero.group.rotation.x = -Math.min(1, P.deadT * 2) * Math.PI / 2;
     if (P.deadT > 2.2 && $('death').style.display !== 'flex') { $('death').style.display = 'flex'; paused = true; }
     return;
@@ -808,23 +1012,20 @@ function updatePlayer(dt) {
   const mv = moveVector();
   const speed = 6.2 + 0.45 * S.stats.zrecznosc;
   let vx = 0, vz = 0;
+  if (heroM) { updateHeroGLB(dt, mv, speed); return; }
   if (P.rollT > 0) {
     P.rollT -= dt;
     const rs = 12 + S.stats.zrecznosc;
     vx = P.rollDir.x * rs; vz = P.rollDir.z * rs;
   } else if (P.attackT >= 0) {
-    const A = ATK[P.combo];
-    P.attackT += dt / (A.len / ATK_SPEED);
-    if (!P.swung && P.attackT >= A.hit - 0.1) { P.swung = true; SFX.swing(); }
-    if (!P.atkHit && P.attackT >= A.hit) { P.atkHit = true; meleeHit(); }
+    P.attackT += dt / 0.5;
+    if (!P.swung && P.attackT >= 0.3) { P.swung = true; SFX.swing(); }
+    if (!P.atkHit && P.attackT >= 0.45) { P.atkHit = true; meleeHit(null); }
     if (mv.m > 0.1) { vx = mv.x * speed * 0.15; vz = mv.z * speed * 0.15; }
-    const lunge = P.attackT > A.hit - 0.16 && P.attackT < A.hit + 0.04 ? (P.combo === 2 ? 5 : 3.5) : 0;
+    const lunge = P.attackT > 0.3 && P.attackT < 0.5 ? (P.combo === 2 ? 5 : 3.5) : 0;
     vx += Math.sin(P.yaw) * lunge; vz += Math.cos(P.yaw) * lunge;
-    if (P.comboQ && P.attackT >= A.hit + 0.12) startAttack();
-    else if (P.attackT >= ATK_END) {
-      P.attackT = -1; P.comboTimer = 0.5;
-      if (heroM) heroM.anim.release(0.3);
-    }
+    if (P.comboQ && P.attackT >= 0.6) legacyAttack();
+    else if (P.attackT >= ATK_END) { P.attackT = -1; P.comboTimer = 0.5; }
   } else if (mv.m > 0.05) {
     vx = mv.x * speed * mv.m; vz = mv.z * speed * mv.m;
     P.yaw = turnTo(P.yaw, Math.atan2(mv.x, mv.z), dt * 12);
@@ -837,15 +1038,6 @@ function updatePlayer(dt) {
   P.mana = Math.min(maxMana(), P.mana + dt * (5 + S.stats.magia));
   if (clock.elapsedTime - P.lastHurt > 6) P.hp = Math.min(maxHp(), P.hp + dt * 2.5);
   // visuals
-  if (heroM) {
-    const r = heroM.root;
-    r.position.copy(P.pos); if (P.pos.y < 0) r.position.y = Math.max(P.pos.y, -0.6);
-    r.rotation.y = P.yaw;
-    heroM.anim.update(dt, P.rollT > 0 || P.attackT >= 0 ? 0 : P.speed / HERO_SCALE);
-    r.visible = !(P.invuln > 0 && Math.floor(P.invuln * 30) % 2 === 0 && P.rollT <= 0);
-    aura.rotation.z += dt;
-    return;
-  }
   const g = hero.group;
   g.position.copy(P.pos);
   if (P.pos.y < 0) g.position.y = Math.max(P.pos.y, -0.6);
@@ -982,8 +1174,8 @@ function interactables() {
   for (const n of npcs) if (n.talk) list.push({ x: n.pos.x, z: n.pos.z, r: 3.2, label: 'Rozmawiaj', act: () => n.talk(n) });
   if (!enemies.some(e => !e.dead && e.state !== 'idle' && e.state !== 'surrender' && dist2(e.pos, P.pos) < 25)) list.push({ x: fox.pos.x, z: fox.pos.z, r: 1.6, label: 'Pogłaszcz Iskrę', act: petFox, low: true });
   const herbsActive = S.quests.herbs >= 0 && S.quests.herbs < 2;
-  if (herbsActive) for (const h of W.herbs) if (!S.herbTaken[h.i]) list.push({ x: h.x, z: h.z, r: 2.4, label: 'Zbierz ziele', act: () => takeHerb(h) });
-  for (const c of W.chests) if (!S.chestOpened[c.i]) list.push({ x: c.x, z: c.z, r: 2.4, label: 'Otwórz skrzynię', act: () => openChest(c) });
+  if (herbsActive) for (const h of W.herbs) if (!S.herbTaken[h.i]) list.push({ x: h.x, z: h.z, r: 2.4, label: 'Zbierz ziele', act: () => { faceTo(h.x, h.z); heroInteract(() => takeHerb(h)); } });
+  for (const c of W.chests) if (!S.chestOpened[c.i]) list.push({ x: c.x, z: c.z, r: 2.4, label: 'Otwórz skrzynię', act: () => { faceTo(c.x, c.z); heroInteract(() => openChest(c)); } });
   list.push({ x: W.spots.house.x, z: W.spots.house.z, r: 3, label: S.houseOwned ? 'Odpocznij w domu' : 'Dom na sprzedaż', act: houseInteract });
   for (const e of enemies) if (e.state === 'surrender') list.push({ x: e.pos.x, z: e.pos.z, r: 3.2, label: 'Zdecyduj o losie', act: () => leaderChoice(e) });
   return list;
@@ -1001,6 +1193,7 @@ function updateInteract() {
 }
 function doInteract() { if (currentInteract && !paused && !P.dead) currentInteract.act(); }
 
+function faceTo(x, z) { if (heroM && !(P.act && P.act.lock)) P.yaw = Math.atan2(x - P.pos.x, z - P.pos.z); }
 function petFox() {
   SFX.bark(); S.flags.foxPets++;
   floatText('❤', fox.pos.x, fox.pos.y + 1.2, fox.pos.z, 'heal', 1.2);
@@ -1014,7 +1207,6 @@ function takeHerb(h) {
   if (S.herbsHave === 6) { toast(S.quests.herbs === 1 ? 'Masz dość ziela. Wróć do Zielarki Jagny.' : 'Masz dość ziela — ktoś może go potrzebować…', 'q'); S.tracked = 'herbs'; }
 }
 function openChest(c) {
-  if (heroM) heroM.anim.play('Interact', { speed: 1.6, fadeIn: 0.1 });
   S.chestOpened[c.i] = true; c.lid.rotation.x = -1.9;
   const g = Math.round(rand(40, 130)); S.gold += g;
   let txt = `Skrzynia: ${g} zł`;
@@ -1303,6 +1495,7 @@ function updateDayNight(dt) {
   hemi.intensity = lerp(0.55, 1.05, dayK);
   hemi.color.setRGB(lerp(0.35, 0.81, dayK), lerp(0.42, 0.9, dayK), lerp(0.75, 1.0, dayK));
   windowMat.emissiveIntensity = (1 - dayK) * 1.2;
+  setEnvIntensity(lerp(0.22, 1.0, dayK));
   for (const m of glowMats) m.emissiveIntensity = 0.4 + (1 - dayK) * 1.2;
   W.starMat.opacity = 1 - dayK;
   W.stars.position.copy(camera.position);
@@ -1567,11 +1760,8 @@ refreshHeroLook();
 
 // ================= main loop =================
 const clock = new THREE.Clock();
-function frame() {
-  requestAnimationFrame(frame);
-  const dt = Math.min(clock.getDelta(), 0.05);
+function stepGame(dt) {
   if (!titleMode && !paused) {
-    const prevT = S.time;
     S.time += dt / DAY_LEN;
     if (S.time >= 1) { S.time -= 1; S.day++; dailyIncome(); }
     updatePlayer(dt);
@@ -1590,10 +1780,18 @@ function frame() {
   updateDayNight(dt);
   updateCamera(dt);
   updateFloats(dt);
+}
+const DBG = { freeze: false };
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (!DBG.freeze) stepGame(dt);
   if (!titleMode) { updateHUD(dt); updateInteract(); }
   const inCombat = enemies.some(e => !e.dead && (e.state === 'chase' || e.state === 'windup' || e.state === 'recover'));
   musicTick(performance.now() / 1000, inCombat ? 'combat' : isNight ? 'night' : 'day');
   renderer.render(scene, camera);
 }
 frame();
-window.__dbg = { refresh: () => refreshHeroLook(), heroM: () => heroM, P, S: () => S, enemies, npcs, W, LOC, spawnEnemy, setS: v => { S = v; } , talk: id => npcs.find(n => n.id === id).talk() };
+window.__dbg = { DBG, step: (n, dt) => { for (let i = 0; i < n; i++) stepGame(dt); renderer.render(scene, camera); },
+  cam: (d, pitch, yaw) => { camDist = d; camDistCur = d; if (pitch !== undefined) camPitch = pitch; if (yaw !== undefined) camYaw = yaw; },
+  input, refresh: () => refreshHeroLook(), heroM: () => heroM, P, S: () => S, enemies, npcs, W, LOC, spawnEnemy, setS: v => { S = v; } , talk: id => npcs.find(n => n.id === id).talk() };

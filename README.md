@@ -14,17 +14,40 @@ Oryginalna gra akcji RPG 3D na Androida (fantasy, wybory moralne, otwarty świat
 - Lisica Iskra — towarzyszka walcząca u twojego boku
 - Automatyczny zapis gry
 
-## Modele 3D i animacje (v1.1)
-- Bohater: realistyczny model z pełnym szkieletem (65 kości, palce), rozczochrane ciemnorude włosy z grzywką, bursztynowe oczy, blizny na całym ciele, skórzane spodnie, pas, buty.
-- Miecz długi (ok. 1,22 m) z jelcem, rękojeścią na dwie dłonie i głowicą.
-- Animacje walki według niemieckiej szkoły miecza długiego (Liechtenauer), chwyt oburącz liczony odwrotną kinematyką:
-  - **Pflug** – garda (postawa spoczynkowa w walce),
-  - **Zornhau** – cięcie z gniewu: z Vom Tag ukośnie w dół z krokiem przemiennym,
-  - **Zwerchhau** – cięcie poprzeczne: poziomo na wysokości głowy, ręce wysoko, jelec chroni głowę,
-  - **Scheitelhau** – cięcie ciemieniowe: pionowo z góry do Langort (długiego sztychu),
-  - **Stich** – pchnięcie z wypadem, **Krone** – zasłona korony.
-- NPC i wrogowie na tym samym szkielecie, więc używają tych samych technik walki.
-- Pipeline: `tools/blender/*.py` (Blender jako moduł Pythona `bpy`), podglądy w `docs/`.
+## Modele 3D i animacje (v1.2)
+**Bohater**
+- Realistyczny model z pełnym szkieletem (66 kości z palcami i kością broni).
+- Fryzura z kart włosów (setki pojedynczych pasm z przezroczystością, kilka warstw), grzywka na oko, ciemnorudy kolor.
+- Blizny wpisane w mapę normalnych, więc łapią światło. Twarz bez zarostu, bursztynowe oczy, pas, spodnie, buty.
+- Miecz długi na wzór typu Oakeshott XVIIIa: zbrocze, krzyżowy jelec z gałkami, skórzana rękojeść z pierścieniami, głowica tarczowa.
+
+**Chwyt**
+- Palce policzone numerycznie wokół rękojeści o średnicy 3,1 cm.
+- Prawdziwa krawędź ostrza w linii kłykci.
+- Lewa dłoń jest lustrem prawej (dłonie zwrócone ku sobie, kciuki w stronę ostrza).
+
+**Animacje według szkoły Liechtenauera**, ułożone w autorskim frameworku z odwrotną kinematyką:
+- **ciosy**: Zornhau → Zwerchhau → Scheitelhau jako kombinacja łańcuchowa (każdy cios zaczyna się tam, gdzie skończył poprzedni), plus powroty do gardy Pflug;
+- **pozostałe techniki**: Stich (pchnięcie z wypadem) i Krone (zasłona);
+- **uniki**: 4 kierunki, jako skoki z mieczem w gardzie;
+- **akcje**: trafienie, czar wypuszczany z lewej dłoni, picie z widocznej butelki, przyklęk przy skrzyni;
+- **mechanika ruchu**: praca stóp (przetaczanie pięta–palce, łuk kroku, obrót na śródstopiu), biodra prowadzą cios, wzrok utkwiony w przeciwniku, ruch obojczyków, rozłożony skręt przedramienia, automatyczne obniżanie bioder przy szerokiej postawie;
+- **root motion**: kroki faktycznie przesuwają postać w grze.
+
+**Lokomocja**
+- Chód w gardzie, bieg i sprint z mieczem przy barku.
+- Fazy chodu i biegu są zsynchronizowane, więc stopy nie ślizgają się przy przejściach.
+
+**Automatyczna kontrola jakości**, klatka po klatce:
+- dosięg rąk i nóg (IK),
+- przenikanie miecza przez ciało,
+- stopy pod ziemią.
+
+**Pozostałe postacie**
+- NPC i wrogowie na tym samym szkielecie używają tych samych technik.
+- Po śmierci miecz wypada z dłoni i spada na ziemię.
+
+Pipeline: `tools/blender/*.py` (Blender jako moduł Pythona `bpy`), podglądy w `docs/`.
 
 ## Autorzy modeli
 - Postacie bazowe, stroje, animacje ruchu: [Quaternius](https://quaternius.com) – CC0.
