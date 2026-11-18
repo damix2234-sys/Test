@@ -1,5 +1,5 @@
 # automated QA: sword/body interpenetration and feet below ground, every frame of every clip
-import sys; sys.path.insert(0, '/tmp/claude-0/-home-user-Test/f99a113e-eb26-5643-ae8a-066cde7aded7/scratchpad/bl')
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import *
 from mathutils.bvhtree import BVHTree
 bpy.ops.wm.open_mainfile(filepath=OUT + 'hero_hema.blend')

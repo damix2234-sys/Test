@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { buildWorld, heightAt, LOC, forestness, windowMat, glowMats, WORLD_HALF } from './world.js';
+import { buildWorld, heightAt, LOC, forestness, windowMat, glowMats, WORLD_HALF, PREFABS, PREFAB_SCALE } from './world.js';
 import { makeHumanoid, makeQuad, animHumanoid, animQuad } from './characters.js';
 import { SFX, initAudio, musicTick, setMusic } from './audio.js';
 import { loadGLB, prepareModel, Animator, attachToBone, findBone, findNode, cleanClips, makeRig, makeQuadRig, PropDrop, setEnvIntensity } from './animator.js';
@@ -192,6 +192,7 @@ const ATK = [
 ];
 const ATK_SPEED = 1.2, ATK_END = 0.72, ROLL_T = 0.55;
 let RIG = null;
+loadGLB('village').then(upgradeVillage).catch(e => console.warn('village', e));
 Promise.all(['hero', 'npc_bandit', 'npc_man', 'npc_woman', 'fox'].map(loadGLB)).then(([gltf, bandit, man, woman, foxG]) => {
   const clips = cleanClips(gltf.animations);
   RIG = { clips, bandit, man, woman, fox: foxG };
@@ -217,6 +218,72 @@ Promise.all(['hero', 'npc_bandit', 'npc_man', 'npc_woman', 'fox'].map(loadGLB)).
   refreshHeroLook();
   upgradeNPCs();
 }).catch(e => console.warn('models', e));
+// ---- medieval buildings assembled from the CC0 Medieval Village MegaKit (replace the placeholder houses) ----
+let villageGlass = null, lanternGlass = null, lanternPools = null;
+function upgradeVillage(vg) {
+  prepareModel(vg.scene);
+  const tpl = n => vg.scene.getObjectByName(n);
+  vg.scene.traverse(o => {
+    if (!o.isMesh || !o.material) return;
+    o.frustumCulled = true; o.castShadow = true; o.receiveShadow = true;
+    const M = o.material;
+    if (/WindowGlass/.test(M.name)) {
+      // leaded window panes: dark and glossy by day, warm candle light from inside at night (opaque: no sorting cost)
+      villageGlass = M; M.transparent = false; M.opacity = 1; M.depthWrite = true;
+      M.color.setRGB(0.045, 0.06, 0.075); M.roughness = 0.12; M.metalness = 0; M.envMapIntensity = 1.8;
+      M.emissive.set(0xff9a3c); M.emissiveIntensity = 0; M.needsUpdate = true;
+    }
+    if (/LanternGlass/.test(M.name)) { lanternGlass = M; M.emissive.set(0xffa040); M.emissiveIntensity = 0; o.castShadow = false; }
+    if (/Vine/.test(M.name)) { M.alphaTest = 0.5; M.transparent = false; M.side = THREE.DoubleSide; o.castShadow = false; }
+  });
+  // not every household keeps a candle burning: some houses get panes that never light up
+  const darkGlass = villageGlass && villageGlass.clone();
+  W.houses.forEach((h, i) => {
+    const t = tpl(h.kind); if (!t) return;
+    const m = t.clone(true);
+    m.position.set(h.x, h.y, h.z); m.rotation.set(0, h.rot, 0); m.scale.setScalar(PREFAB_SCALE);
+    if (darkGlass && i % 4 === 2) m.traverse(o => { if (o.isMesh && o.material === villageGlass) o.material = darkGlass; });
+    h.parent.remove(h.group); h.parent.add(m); h.group = m;
+  });
+  for (const p of W.props) {
+    const t = tpl(p.kind); if (!t) continue;
+    const m = t.clone(true);
+    m.position.copy(p.group.position); m.rotation.copy(p.group.rotation); m.scale.setScalar(p.s);
+    p.parent.remove(p.group); p.parent.add(m); p.group = m;
+  }
+  // soft pools of lantern light on the ground at night (additive decals: far cheaper than real point lights on a phone)
+  if (W.lanterns) {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+    const g = cv.getContext('2d'), gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    gr.addColorStop(0, 'rgba(255,190,110,1)'); gr.addColorStop(0.35, 'rgba(255,150,70,0.45)'); gr.addColorStop(1, 'rgba(255,120,40,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+    const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+    const poolM = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: true });
+    const haloM = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+    const poolG = new THREE.PlaneGeometry(6, 6); poolG.rotateX(-Math.PI / 2);
+    for (const lp of W.lanterns) {
+      const a = Math.atan2(lp.x, lp.z), hx = lp.x - Math.sin(a) * 0.56, hz = lp.z - Math.cos(a) * 0.56;
+      const pool = new THREE.Mesh(poolG, poolM); pool.position.set(hx, heightAt(hx, hz) + 0.06, hz); pool.renderOrder = 2; scene.add(pool);
+      const halo = new THREE.Sprite(haloM); halo.scale.setScalar(1.6); halo.position.set(hx, lp.y + 2.19, hz); scene.add(halo);
+    }
+    lanternPools = { poolM, haloM };
+  }
+  // props around the village: a wagon by the tavern, crates at the market, a fence by the herb garden
+  const put = (name, x, z, rot, r) => {
+    const t = tpl(name); if (!t) return;
+    const m = t.clone(true); m.position.set(x, heightAt(x, z), z); m.rotation.y = rot; m.scale.setScalar(PREFAB_SCALE); scene.add(m);
+    if (r) W.colliders.addCircle(x, z, r);
+  };
+  const tv = W.spots.tavern;
+  if (tv) { const a = Math.atan2(tv.x, tv.z); put('P_Wagon', tv.x + Math.cos(a) * 4.2, tv.z - Math.sin(a) * 4.2, a + 0.4, 1.6); }
+  const ms = W.spots.merchant;
+  if (ms) { put('P_Crate', ms.x - 2.2, ms.z + 1.2, 0.3, 0.6); put('P_Crate', ms.x - 2.5, ms.z + 2.4, 1.1, 0.6); put('P_Crate', ms.x + 2.4, ms.z - 0.6, 0.7, 0.6); }
+  const hb = LOC.herbalist, ha = Math.atan2(-hb.x, -hb.z);
+  for (let i = 0; i < 4; i++) {
+    const side = ha + Math.PI / 2, d = 3.6 + i * 2.3;
+    put('P_WoodenFence', hb.x + Math.sin(ha) * 3.0 + Math.sin(side) * d, hb.z + Math.cos(ha) * 3.0 + Math.cos(side) * d, side + Math.PI / 2, 0);
+  }
+}
 function rigFor(spec) {
   if (spec.model === 'fox') return makeQuadRig(RIG.fox, spec);
   const m = { bandit: RIG.bandit, man: RIG.man, woman: RIG.woman }[spec.model];
@@ -1495,6 +1562,9 @@ function updateDayNight(dt) {
   hemi.intensity = lerp(0.55, 1.05, dayK);
   hemi.color.setRGB(lerp(0.35, 0.81, dayK), lerp(0.42, 0.9, dayK), lerp(0.75, 1.0, dayK));
   windowMat.emissiveIntensity = (1 - dayK) * 1.2;
+  if (villageGlass) villageGlass.emissiveIntensity = (1 - dayK) * 1.35;
+  if (lanternGlass) lanternGlass.emissiveIntensity = (1 - dayK) * 1.6;
+  if (lanternPools) { lanternPools.poolM.opacity = (1 - dayK) * 0.55; lanternPools.haloM.opacity = (1 - dayK) * 0.7; }
   setEnvIntensity(lerp(0.22, 1.0, dayK));
   for (const m of glowMats) m.emissiveIntensity = 0.4 + (1 - dayK) * 1.2;
   W.starMat.opacity = 1 - dayK;
@@ -1677,7 +1747,7 @@ function renderMenu() {
   } else if (menuTab === 'opts') {
     body.innerHTML = `<h3>Grafika</h3><div id="qBtns" style="display:flex;gap:8px;flex-wrap:wrap"></div>
       <p style="font-size:12px;opacity:.7">Zmiana jakości przeładuje grę (postęp jest zapisywany).</p>
-      <h3>Autorzy modeli</h3><p style="font-size:12px;opacity:.8">Postacie, stroje i animacje ruchu: Quaternius (CC0). Lis i wilki: model „Fox” — tomkranis, AsoboStudio, scurest (CC BY 4.0). Animacje walki mieczem według szkoły Liechtenauera, postać bohatera i miecz: autorskie.</p><h3>Dźwięk</h3><div id="sBtns"></div><h3>Zapis</h3><div id="saveBtns" style="display:flex;gap:8px;flex-wrap:wrap"></div>`;
+      <h3>Autorzy modeli</h3><p style="font-size:12px;opacity:.8">Postacie, stroje i animacje ruchu: Quaternius (CC0). Budynki i rekwizyty wioski: Quaternius Medieval Village MegaKit (CC0). Lis i wilki: model „Fox” — tomkranis, AsoboStudio, scurest (CC BY 4.0). Animacje walki mieczem według szkoły Liechtenauera, postać bohatera i miecz: autorskie.</p><h3>Dźwięk</h3><div id="sBtns"></div><h3>Zapis</h3><div id="saveBtns" style="display:flex;gap:8px;flex-wrap:wrap"></div>`;
     for (const [q, n] of [['low', 'Niska (szybka)'], ['medium', 'Średnia'], ['high', 'Wysoka']]) {
       const b = document.createElement('button'); b.className = 'btn' + (quality === q ? ' sel' : ''); b.textContent = n;
       b.onclick = () => { saveGame(); try { localStorage.setItem('kw_quality', q); } catch (e) { } location.reload(); };

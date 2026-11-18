@@ -1,7 +1,7 @@
 # HEMA clip library (German longsword after Liechtenauer / Ringeck), authored at 30 fps.
 # World: character faces -Y, character's right = -X, +yaw turns toward the character's left.
 # Every clip starts at root (0,0); root motion = pelvis travel on the ground.
-import sys; sys.path.insert(0, '/tmp/claude-0/-home-user-Test/f99a113e-eb26-5643-ae8a-066cde7aded7/scratchpad/bl')
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hema import *
 
 def add2(a, b): return (a[0] + b[0], a[1] + b[1])
@@ -15,7 +15,7 @@ ST_SCH = dict(L=(0.10, -0.36), Ly=-6, R=(-0.16, 0.04), Ry=-50, z=0.87, yaw=-20, 
 # ---------------- sword positions (relative to root) ----------------
 PFLUG = dict(G=(-0.13, -0.30, 1.03), b=(0.09, -0.94, 0.32), e=(0, 0, -1))
 VOMTAG = dict(G=(-0.27, -0.06, 1.49), b=(0.05, 0.30, 0.95), e=(0, -0.95, 0.3))
-ZORN_END = dict(G=(0.04, -0.38, 1.05), b=(0.49, -0.70, -0.52), e=(0.4, 0.45, -0.8))
+ZORN_END = dict(G=(0.09, -0.42, 1.00), b=(0.49, -0.70, -0.52), e=(0.4, 0.45, -0.8))
 ZW_END = dict(G=(0.01, -0.44, 1.52), b=(0.86, -0.48, 0.12), e=(-0.45, -0.85, 0.1))
 LANGORT = dict(G=(-0.02, -0.52, 1.34), b=(0.0, -0.99, 0.08), e=(0, -0.08, -1))
 
@@ -63,14 +63,14 @@ def clip_zornhau():
         K(5, (0.005, 0.01), G=(-0.23, -0.18, 1.30), b=(0.10, -0.35, 0.93), e=(0, -0.9, -0.2)),
         K(9, (0.01, 0.02), sword=VOMTAG, yaw=-36, cyaw=10, pz=0.91),
         K(11, (0.01, 0.02), G=(-0.28, -0.03, 1.50), b=(0.06, 0.38, 0.92), e=(0, -1, 0.4), yaw=-38, cyaw=8, hold=True),
-        K(13, (-0.005, -0.06), G=(-0.24, -0.22, 1.54), b=(0.10, -0.15, 0.98), e=(0.2, -0.98, -0.1)),
+        K(13, (-0.005, -0.06), G=(-0.26, -0.25, 1.54), b=(0.10, -0.15, 0.98), e=(0.2, -0.98, -0.1)),
         K(14, (-0.02, -0.15), yaw=-14, cyaw=-2, pz=0.89),
-        K(15, (-0.025, -0.24), G=(-0.12, -0.45, 1.45), b=(0.32, -0.72, 0.62), e=(0.5, -0.45, -0.75)),
+        K(15, (-0.025, -0.24), G=(-0.14, -0.48, 1.45), b=(0.32, -0.72, 0.62), e=(0.5, -0.45, -0.75)),
         K(16, (-0.03, -0.32), G=(-0.06, -0.50, 1.34), b=(0.42, -0.84, 0.34), e=(0.6, -0.05, -0.8), cyaw=-10, cpitch=11),
         K(17, (-0.035, -0.40), pz=0.872, yaw=8, Rb=R_to, Ry=ST_RFWD['Ry']),
         K(18, (-0.04, -0.46), G=(0.03, -0.46, 1.17), b=(0.52, -0.78, -0.10), e=(0.45, 0.3, -0.84)),
         K(13, None, Ly=ST_GUARD['Ly']), K(20, None, Ly=ST_RFWD['Ly']),
-        K(21, (-0.04, -0.50), G=(0.06, -0.40, 1.06), b=(0.50, -0.72, -0.48), e=(0.4, 0.45, -0.8)),
+        K(21, (-0.04, -0.50), G=(0.08, -0.42, 1.03), b=(0.50, -0.72, -0.48), e=(0.4, 0.45, -0.8)),
         K(24, r_end, ST_RFWD, ZORN_END, hold=True),
     ]
     return 'Hema_Zornhau', keys, [('R', 10, 17, 0.07)], 24, True

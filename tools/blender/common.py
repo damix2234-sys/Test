@@ -1,7 +1,9 @@
 import bpy, bmesh, math, random
 from mathutils import Vector, Matrix, Euler, Quaternion
-X='/tmp/claude-0/-home-user-Test/f99a113e-eb26-5643-ae8a-066cde7aded7/scratchpad/x/'
-SC='/tmp/claude-0/-home-user-Test/f99a113e-eb26-5643-ae8a-066cde7aded7/scratchpad/'
+import os
+# working folder with x/ (extracted CC0 asset packs) and out/ (results); override with KRONIKI_WORK
+SC=os.environ.get('KRONIKI_WORK', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'work')).rstrip('/')+'/'
+X=SC+'x/'
 OUT=SC+'out/'
 BASE=X+'Universal Base Characters[Standard]/Base Characters/Godot - UE/'
 OUTF=X+'Modular Character Outfits - Fantasy[Standard]/Exports/glTF (Godot-Unreal)/'

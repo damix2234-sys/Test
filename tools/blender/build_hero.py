@@ -1,4 +1,4 @@
-import sys; sys.path.insert(0, '/tmp/claude-0/-home-user-Test/f99a113e-eb26-5643-ae8a-066cde7aded7/scratchpad/bl')
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import *
 from PIL import Image, ImageDraw, ImageFilter
 import numpy as np, os
@@ -27,6 +27,48 @@ def attach(path):
 pants=attach(OUTF+'Modular Parts/Male_Peasant_Legs.gltf')[0]
 boots=attach(OUTF+'Modular Parts/Male_Ranger_Feet_Boots.gltf')[0]
 pants.name='Pants'; boots.name='Boots'
+
+# ---------- reshape toward the reference: younger, narrower face; leaner upper body (mesh only, rig untouched) ----------
+def sstep(e0, e1, x):
+    t = max(0.0, min(1.0, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t)
+gidx = {g.name: g.index for g in body.vertex_groups}
+def wget(v, name):
+    gi = gidx.get(name)
+    for g in v.groups:
+        if g.group == gi: return g.weight
+    return 0.0
+mw = body.matrix_world; mwi = mw.inverted()
+A_ = arm.matrix_world
+bones_ = arm.data.bones
+def bone_seg(n):
+    b = bones_[n]; return A_ @ b.head_local, A_ @ b.tail_local
+SLIM = {'spine_03': 0.075, 'spine_02': 0.05, 'clavicle_l': 0.10, 'clavicle_r': 0.10, 'upperarm_l': 0.10, 'upperarm_r': 0.10,
+        'lowerarm_l': 0.07, 'lowerarm_r': 0.07, 'neck_01': 0.06}
+segs = {n: bone_seg(n) for n in SLIM}
+for v in body.data.vertices:
+    p = mw @ v.co
+    # jaw & chin narrowing (front lower face)
+    wh = wget(v, 'Head')
+    if wh > 0.3:
+        tz = sstep(1.678, 1.612, p.z); ty = sstep(0.035, -0.02, p.y)
+        k = 0.085 * tz * ty * min(1.0, wh / 0.8)
+        p.x *= (1 - k)
+        # chin a touch narrower and slightly more pointed
+        if p.z < 1.625 and p.y < -0.04: p.y -= 0.0025 * sstep(1.625, 1.59, p.z) * sstep(0.04, 0.0, abs(p.x))
+    # leaner chest/shoulders/arms: contract toward the bone axes
+    move = Vector((0, 0, 0)); wsum = 0.0
+    for n, amt in SLIM.items():
+        w = wget(v, n)
+        if w <= 0.01: continue
+        h, t = segs[n]; d = t - h; u = max(0.0, min(1.0, (p - h).dot(d) / d.length_squared)); q = h + d * u
+        move += (q - p) * amt * w; wsum += w
+    if wsum > 0 and p.z > 1.12: p += move
+    # flatter trapezius (the heavy slope between neck and shoulders)
+    ax = abs(p.x)
+    if 0.04 < ax < 0.21 and 1.47 < p.z < 1.62 and p.y > -0.06:
+        p.z -= 0.02 * sstep(0.04, 0.09, ax) * sstep(0.21, 0.15, ax) * sstep(1.47, 1.52, p.z) * sstep(1.62, 1.57, p.z)
+    v.co = mwi @ p
+body.data.update()
 
 # remove hidden body parts under the trousers/boots
 bm=bmesh.new(); bm.from_mesh(body.data)

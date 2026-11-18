@@ -1,6 +1,6 @@
 # Animation authoring framework: per-frame pose solve (Hermite channels, procedural footwork, IK, look-at),
 # baked to bone keys with forearm-twist distribution and root-motion extraction.
-import sys; sys.path.insert(0, '/tmp/claude-0/-home-user-Test/f99a113e-eb26-5643-ae8a-066cde7aded7/scratchpad/bl')
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rig2 import *
 import rig2
 

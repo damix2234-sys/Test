@@ -174,6 +174,11 @@ function mesh(geo, mat, x = 0, y = 0, z = 0, parent) {
   return m;
 }
 
+export const PREFAB_SCALE = 1.12;
+export const PREFABS = {
+  P_SmallA: { w: 4, d: 4 }, P_SmallB: { w: 4, d: 4 }, P_Long: { w: 4, d: 6 }, P_Medium: { w: 6, d: 6 },
+  P_Tavern: { w: 6, d: 8 }, P_Manor: { w: 6, d: 6 }, P_Hut: { w: 4, d: 4 },
+};
 export const windowMat = new THREE.MeshLambertMaterial({ color: 0x3a2f1f, emissive: 0xffb347, emissiveIntensity: 0 });
 export const glowMats = [];
 
@@ -199,7 +204,16 @@ function makeHouse(o, colliders) {
 export function buildWorld(scene, quality) {
   const rng = mulberry32(1337);
   const colliders = new Colliders();
-  const out = { colliders, spots: {}, herbs: [], chests: [], villageHomes: [] };
+  const out = { colliders, spots: {}, herbs: [], chests: [], villageHomes: [], houses: [], props: [] };
+  function prefabHouse(kind, x, y, z, rot, parent, extra = {}) {
+    const P = PREFABS[kind], k = PREFAB_SCALE;
+    const o = Object.assign({ x, y, z, rot, w: P.w * k + 0.25, d: P.d * k + 0.25, h: 3, roofH: 2.2 }, extra);
+    const g = makeHouse(o, colliders); parent.add(g);
+    out.houses.push({ kind, x, y, z, rot, group: g, parent });
+    return o;
+  }
+  // procedural stand-in that main.js swaps for a kit prefab once village.glb has loaded
+  const kitProp = (kind, group, parent, s = 1) => out.props.push({ kind, group, parent, s });
 
   // ----- terrain -----
   const SIZE = WORLD_HALF * 2, SEG = quality === 'low' ? 120 : 168;
@@ -352,10 +366,11 @@ export function buildWorld(scene, quality) {
     spots.push({ x: Math.sin(ang) * r, z: Math.cos(ang) * r, ang });
   }
   const roofs = [0x8b3a2a, 0x6e4a2a, 0x9a5a30, 0x7a3030, 0x5a4a3a];
+  const KINDS = ['P_Long', 'P_SmallB', 'P_Medium', 'P_SmallA', 'P_Long', 'P_Medium', 'P_SmallB', 'P_Long'];
   spots.forEach((s, i) => {
     const tavern = i === 0, widow = i === 2;
-    const o = { x: s.x, y: 2.5, z: s.z, rot: s.ang + Math.PI, w: tavern ? 9 : 6 + (i % 2), d: tavern ? 7 : 5.5, h: tavern ? 4 : 3, roof: roofs[i % roofs.length], chimney: i % 2 === 0, roofH: tavern ? 2.8 : 2.2, wall: i % 3 === 1 ? 0xd8c8a8 : 0xe8dcc0 };
-    village.add(makeHouse(o, colliders));
+    const kind = tavern ? 'P_Tavern' : widow ? 'P_SmallA' : KINDS[i % KINDS.length];
+    const o = prefabHouse(kind, s.x, 2.5, s.z, s.ang + Math.PI, village, { h: tavern ? 4 : 3, roof: roofs[i % roofs.length], chimney: i % 2 === 0, roofH: tavern ? 2.8 : 2.2, wall: i % 3 === 1 ? 0xd8c8a8 : 0xe8dcc0 });
     const door = { x: s.x - Math.sin(s.ang) * (o.d / 2 + 1.8), z: s.z - Math.cos(s.ang) * (o.d / 2 + 1.8) };
     out.villageHomes.push(door);
     if (tavern) {
@@ -364,7 +379,8 @@ export function buildWorld(scene, quality) {
       mesh(new THREE.BoxGeometry(0.15, 3, 0.15), lam(0x5a3d24), 0, 1.5, 0, sign);
       mesh(new THREE.BoxGeometry(1.2, 0.7, 0.1), lam(0xb08040), 0.6, 2.6, 0, sign);
       mesh(new THREE.BoxGeometry(0.4, 0.4, 0.12), lam(0xd4a020), 0.6, 2.6, 0, sign);
-      sign.position.set(door.x + 2.5, 2.5, door.z); village.add(sign);
+      sign.position.set(door.x + 2.5, 2.5, door.z); sign.rotation.y = Math.atan2(-door.x - 2.5, -door.z); village.add(sign);
+      kitProp('P_Sign', sign, village);
     }
     if (widow) out.spots.widow = door;
   });
@@ -377,6 +393,7 @@ export function buildWorld(scene, quality) {
   for (const sx of [-1, 1]) mesh(new THREE.BoxGeometry(0.15, 2.2, 0.15), lam(0x5a3d24), sx * 1.0, 1.6, 0, well);
   mesh(gableRoof(2.2, 1.6, 0.8, 0.2), lam(0x7a3a2a, { flatShading: true }), 0, 2.6, 0, well).rotation.y = Math.PI / 2;
   well.position.set(0, 2.5, 0); village.add(well);
+  kitProp('P_Well', well, village);
   colliders.addCircle(0, 0, 1.4);
 
   // market stall
@@ -386,6 +403,7 @@ export function buildWorld(scene, quality) {
   const awn = mesh(new THREE.BoxGeometry(3.4, 0.1, 1.9), lam(0xb83a3a), 0, 2.6, 0, stall); awn.rotation.x = 0.15;
   for (let i = 0; i < 5; i++) mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), lam([0xd4a020, 0x8a2a8a, 0x2a8a3a, 0xc04020, 0x3060c0][i]), -1.1 + i * 0.55, 1.15, 0, stall);
   stall.position.set(-7, 2.5, 6); stall.rotation.y = 0.6; village.add(stall);
+  kitProp('P_Stall', stall, village);
   colliders.addBox(-7, 6, 1.6, 0.8, 0.6);
   out.spots.merchant = { x: -7 - Math.sin(0.6) * 1.4, z: 6 - Math.cos(0.6) * 1.4 };
   out.spots.elder = { x: 3, z: 3 };
@@ -398,13 +416,14 @@ export function buildWorld(scene, quality) {
     const lp = new THREE.Group();
     mesh(new THREE.BoxGeometry(0.15, 2.6, 0.15), lam(0x3a2a1a), 0, 1.3, 0, lp);
     mesh(new THREE.BoxGeometry(0.35, 0.45, 0.35), lanternMat, 0, 2.7, 0, lp);
-    lp.position.set(Math.sin(a) * r, 2.5, Math.cos(a) * r); village.add(lp);
+    lp.position.set(Math.sin(a) * r, 2.5, Math.cos(a) * r); lp.rotation.y = a + Math.PI / 2; village.add(lp);
+    kitProp('P_Lantern', lp, village);
+    out.lanterns = out.lanterns || []; out.lanterns.push(lp.position.clone());
     colliders.addCircle(lp.position.x, lp.position.z, 0.2);
   }
 
   // ----- herbalist hut -----
-  const hut = makeHouse({ x: LOC.herbalist.x, y: heightAt(LOC.herbalist.x, LOC.herbalist.z), z: LOC.herbalist.z, rot: Math.atan2(-LOC.herbalist.x, -LOC.herbalist.z), w: 5, d: 4.5, h: 2.6, roof: 0x4a6a2a, wall: 0xc8b890, chimney: true }, colliders);
-  scene.add(hut);
+  prefabHouse('P_Hut', LOC.herbalist.x, heightAt(LOC.herbalist.x, LOC.herbalist.z), LOC.herbalist.z, Math.atan2(-LOC.herbalist.x, -LOC.herbalist.z), scene, { h: 2.6, roof: 0x4a6a2a, wall: 0xc8b890, chimney: true });
   const ha = Math.atan2(-LOC.herbalist.x, -LOC.herbalist.z);
   out.spots.herbalist = { x: LOC.herbalist.x + Math.sin(ha) * 4.5, z: LOC.herbalist.z + Math.cos(ha) * 4.5 };
   for (let i = 0; i < 6; i++) {
@@ -437,12 +456,13 @@ export function buildWorld(scene, quality) {
   {
     const hx = LOC.house.x, hz = LOC.house.z, hy = heightAt(hx, hz);
     const rot = Math.atan2(-hx, -hz);
-    scene.add(makeHouse({ x: hx, y: hy, z: hz, rot, w: 8, d: 6.5, h: 3.6, roof: 0x2a4a7a, wall: 0xf0e6d0, chimney: true, roofH: 2.6 }, colliders));
+    prefabHouse('P_Manor', hx, hy, hz, rot, scene, { h: 3.6, roof: 0x2a4a7a, wall: 0xf0e6d0, chimney: true, roofH: 2.6 });
     const sx = hx + Math.sin(rot) * 6.2 + Math.cos(rot) * 2.5, sz = hz + Math.cos(rot) * 6.2 - Math.sin(rot) * 2.5;
     const sign = new THREE.Group();
     mesh(new THREE.BoxGeometry(0.15, 1.6, 0.15), lam(0x5a3d24), 0, 0.8, 0, sign);
     mesh(new THREE.BoxGeometry(1.1, 0.6, 0.08), lam(0xc8a060), 0, 1.5, 0, sign);
     sign.position.set(sx, heightAt(sx, sz), sz); sign.rotation.y = rot; scene.add(sign);
+    kitProp('P_Sign', sign, scene, 0.55);
     out.spots.house = { x: hx + Math.sin(rot) * 5.2, z: hz + Math.cos(rot) * 5.2 };
   }
 

@@ -1,4 +1,4 @@
-import sys; sys.path.insert(0, '/tmp/claude-0/-home-user-Test/f99a113e-eb26-5643-ae8a-066cde7aded7/scratchpad/bl')
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from loco import *
 import clips, time
 bpy.ops.wm.open_mainfile(filepath=OUT+'hero_stage1.blend')
