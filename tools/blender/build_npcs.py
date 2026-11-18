@@ -34,6 +34,9 @@ def build(name, base, bodyname, zcut, outfit_files, hair_files, sword=False):
     if sword:
         compute_edge(arm)
         build_sword(arm, steel_col=(0.55, 0.55, 0.57))
+    import rigtwist
+    rigtwist.add_twist_bones(arm)
+    rigtwist.reweight(arm, [o for o in bpy.data.objects if o.type == 'MESH' and o.parent == arm])
     decimate_heavy(2200,0.4,skip=('Sword',))
     for im in bpy.data.images:
         if im.size[0]>1024: im.scale(1024,1024)

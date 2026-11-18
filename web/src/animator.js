@@ -65,11 +65,11 @@ export function attachToBone(root, boneName, obj, modelPos, modelQuat = new THRE
   return bone;
 }
 
-// keep rotations; translations only for root (root motion) and pelvis; drop scale and prop bones
+// keep rotations; translations only for root (root motion) and pelvis; drop scale and the flask bone
 export function cleanClips(anims) {
   return anims.map(c => new THREE.AnimationClip(c.name, c.duration, c.tracks.filter(t => {
     const i = t.name.lastIndexOf('.'); const b = t.name.slice(0, i), p = t.name.slice(i + 1);
-    if (p === 'scale' || b === 'weapon_r' || b === 'flask_l') return false;
+    if (p === 'scale' || b === 'flask_l') return false;   // weapon_r rotation is kept: the sword pivots in the hand
     if (p === 'position') return b === 'root' || b === 'pelvis';
     return true;
   })));
@@ -84,6 +84,12 @@ export class Animator {
     this.root = root;
     this.mixer = new THREE.AnimationMixer(root);
     this.C = {}; this.RT = {};
+    // drop tracks for nodes this model does not have (e.g. the sword bone on unarmed villagers)
+    const names = new Set(); root.traverse(o => names.add(o.name));
+    clips = clips.map(c => {
+      const tr = c.tracks.filter(t => names.has(t.name.slice(0, t.name.lastIndexOf('.'))));
+      return tr.length === c.tracks.length ? c : new THREE.AnimationClip(c.name, c.duration, tr);
+    });
     for (const c of clips) {
       const rt = c.tracks.find(t => t.name === 'root.position');
       if (rt) this.RT[c.name] = rt;

@@ -6,7 +6,8 @@ import json
 GJ = json.load(open(OUT + 'grip.json'))
 FJ = json.load(open(OUT + 'flask.json'))
 GRIP_R = Vector((GJ['gx'], GJ['gy'], GJ['gz']))   # centre of the right fist (rest/T pose), grip axis along world Y
-B_REST = Vector((0, -1, 0))                        # blade leaves the fist on the thumb/index side
+TILT = math.radians(GJ.get('tilt', 0.0))            # grip runs diagonally across the palm (natural power grip)
+B_REST = Vector((-math.sin(TILT), -math.cos(TILT), 0))   # blade leaves the fist on the thumb/index side, leaning to the fingertips
 LH_OFF = 0.088                                     # left hand centre sits this far toward the pommel
 E_REST = None                                      # true edge: in line with the middle knuckles (computed from the fist)
 
@@ -38,7 +39,7 @@ def compute_edge(arm):
         pip = (M @ Matrix.Translation((0, bones[f'{f}_01_r'].length, 0))).to_translation()
         acc += pip
     acc /= 4
-    d = acc - GRIP_R; d.y = 0
+    d = acc - GRIP_R; d = d - B_REST * d.dot(B_REST)
     E_REST = d.normalized()
     return E_REST
 

@@ -2,6 +2,7 @@
 # baked to bone keys with forearm-twist distribution and root-motion extraction.
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rig2 import *
+from arms import ArmSolver, twist_records
 import rig2
 
 def Rz(d): return Matrix.Rotation(math.radians(d), 3, 'Z')
@@ -67,6 +68,12 @@ class Author:
                    'legs': [ik('calf_r', self.FR, self.KR, -90), ik('calf_l', self.FL, self.KL, -90)], 'look': []}
         for h, t, g in (('hand_r', self.TR, 'rarm'), ('hand_l', self.TL, 'larm'), ('foot_r', self.FR, 'legs'), ('foot_l', self.FL, 'legs')):
             c = pb[h].constraints.new('COPY_ROTATION'); c.target = t; self.cg[g].append(c)
+        # arms are solved analytically (arms.ArmSolver): the IK/copy-rotation arm constraints stay muted
+        for g_ in ('rarm', 'larm'):
+            for c_ in self.cg[g_]: c_.mute = True
+            self.cg[g_] = []
+        self.AS = ArmSolver(arm, bpy.data.objects['Body'])
+        self.active_arms = ('r', 'l')
         for bn, inf in (('neck_01', 0.35), ('Head', 1.0)):
             c = pb[bn].constraints.new('DAMPED_TRACK'); c.target = self.LOOK; c.track_axis = 'TRACK_Z'; c.influence = inf
             self.__dict__['look_' + bn] = c; self.cg['look'].append(c)
@@ -281,7 +288,7 @@ class Author:
             q = HLrot.to_quaternion().slerp(Rfree.to_quaternion(), smooth(lhw))
             HLrot = q.to_matrix(); HLpos = HLpos.lerp(st['lhp'], smooth(lhw))
         HL = HLrot.to_4x4(); HL.translation = HLpos
-        self.cur = dict(HR=HR, HL=HL, W=W)
+        self.cur = dict(HR=HR, HL=HL, W=W, lfree=lhw)
         # pass 1: body without arms -> shoulders
         bpy.context.view_layer.update()
         A = self.arm.matrix_world
@@ -295,27 +302,14 @@ class Author:
             pr = 12 * reach
             pb[f'clavicle_{s}'].rotation_quaternion = (self.local_rot(self.ax_clav_up[s], el) @ self.local_rot(self.ax_clav_fwd[s], pr)).to_quaternion()
         bpy.context.view_layer.update()
-        # elbow & knee poles
-        Ry_ = Rz(yaw + cy)
-        for side, s, Ht, PT in (('R', 'r', HR, self.PR), ('L', 'l', HL, self.PL)):
-            S0 = (A @ pb[f'upperarm_{s}'].matrix).to_translation()
-            wr = Ht.translation
-            h = clamp((wr.z - S0.z + 0.05) / 0.35, 0, 1)
-            out = Ry_ @ Vector((-1 if s == 'r' else 1, 0, 0)); fwd = Ry_ @ Vector((0, -1, 0)); down = Vector((0, 0, -1))
-            if s == 'r': hint = out * (0.55 + 0.35 * h) + down * (0.9 - 0.7 * h) + fwd * (0.05 + 0.3 * h)
-            else: hint = out * (0.35 + 0.4 * h) + down * (0.9 - 0.7 * h) + fwd * (0.1 + 0.25 * h)
-            key = 'eR' if s == 'r' else 'eL'
-            if key in st: hint = hint.normalized().lerp(st[key].normalized(), 0.7)
-            PT.location = (S0 + wr) * 0.5 + hint.normalized() * 0.45
+        # knee poles (the arms are solved in bake_cb by the anatomical arm solver)
         for side, s, KT in (('L', 'l', self.KL), ('R', 'r', self.KR)):
             ball, fy, fp, piv, lift, toe = st['foot' + side]
             hip = (A @ pb[f'thigh_{s}'].matrix).to_translation()
             ank = (self.FL if s == 'l' else self.FR).matrix_world.translation
             fdir = Rz(fy) @ Vector((0, -1, 0))
             KT.location = (hip + ank) * 0.5 + fdir * 0.6 + Vector((0.04 if s == 'l' else -0.04, 0, 0))
-        self.TR.matrix_world = HR; self.TL.matrix_world = HL
         bpy.context.view_layer.update()
-        self.declash(W)
 
     def sword_points(self, W):
         G = W.translation; b = (W.to_3x3() @ B_REST).normalized()
@@ -363,39 +357,65 @@ class Author:
             self.apply(frames_state[i][1], i)
         return self.bake_cb(name, len(frames_state), cb, root_motion, twist, report)
 
+    def pose_arms(self, pr, sol):
+        """sol: {side: (phi, psi)}. Writes upperarm / lowerarm / hand matrices level by level; returns hand targets."""
+        mats = {s: self.AS.pose(self.pb, pr, s, *sol[s]) for s in sol}
+        for lvl, nm in enumerate(('upperarm', 'lowerarm', 'hand')):
+            for s, M in mats.items(): self.pb[f'{nm}_{s}'].matrix = M[lvl]
+            bpy.context.view_layer.update()
+        return {s: M[2] for s, M in mats.items()}
+
     def bake_cb(self, name, count, cb, root_motion=True, twist=0.5, report=True, check_left=True):
-        """cb(i) poses frame i (and sets self.cur HR/HL). Records, post-processes and writes an action."""
-        recs = []; errs = []; legerr = []
+        """cb(i) poses frame i (body, clavicles, fingers, legs; sets self.cur HR/HL/W). Pass A collects the arm problems,
+        the arm solver picks elbow swivel / left-hand roll for the whole clip, pass B poses, records and keys."""
+        active = tuple(self.active_arms)
+        probs = []
+        for i in range(count):
+            cb(i); bpy.context.view_layer.update()
+            c = self.cur
+            probs.append(self.AS.problem(self.pb, c['HR'], c['HL'], c['W'], active, c.get('lfree', 0.0)))
+        trk = {}
+        if 'r' in active: trk['r'] = self.AS.solve_track(probs, 'r')
+        others = [self.AS.segments(pr, 'r', self.AS.hand_target(pr, 'r', trk['r'][i][1]), trk['r'][i][0]) for i, pr in enumerate(probs)] if 'r' in trk else None
+        if 'l' in active: trk['l'] = self.AS.solve_track(probs, 'l', others)
+        recs = []; errs = []; legerr = []; worst = {}
+        self.arm_stats = []
         for i in range(count):
             cb(i)
+            sol = {s: trk[s][i] for s in trk}
+            tg = self.pose_arms(probs[i], sol)
+            # the sword stays on its authored path; the hand's grip slack is a pivot of the hand around the handle
+            if 'r' in sol:
+                self.pb['weapon_r'].matrix = probs[i]['W'] @ self.W_REST.inverted() @ self.AS.R['weapon_r']
+                bpy.context.view_layer.update()
             r = self.record()
             A = self.arm.matrix_world
-            eR = ((A @ r['hand_r']).translation - self.cur['HR'].translation).length
-            eL = ((A @ r['hand_l']).translation - self.cur['HL'].translation).length if check_left else 0.0
+            eR = ((A @ r['hand_r']).translation - tg['r'].translation).length if 'r' in tg else 0.0
+            eL = ((A @ r['hand_l']).translation - tg['l'].translation).length if ('l' in tg and check_left) else 0.0
             if not self.cg['legs'][0].mute:
                 for s_, FT in (('r', self.FR), ('l', self.FL)):
                     el = ((A @ r[f'foot_{s_}']).translation - FT.matrix_world.translation).length
                     if el > 0.01: legerr.append((i, s_, round(el * 100, 1)))
+            st_ = {}
+            for s_ in trk:
+                rp = self.AS.report(probs[i], s_, *sol[s_]); st_[s_] = rp
+                if rp['cost'] > worst.get(s_, (-1,))[0]: worst[s_] = (rp['cost'], i, rp, sol[s_])
+            for s_ in 'rl':
+                tw, tau, tau_u = twist_records(self.AS.R, r, s_)
+                r.update(tw)
+            self.arm_stats.append(st_)
             errs.append((i, eR, eL))
             recs.append(r)
         if report:
             mR = max(errs, key=lambda x: x[1]); mL = max(errs, key=lambda x: x[2])
             flag = '  !!' if mR[1] > 0.012 or mL[2] > 0.012 else ''
-            print(f'{flag} {name}: frames={len(recs)} IK err R max {mR[1]*100:.1f}cm @{mR[0]}  L max {mL[2]*100:.1f}cm @{mL[0]}')
+            print(f'{flag} {name}: frames={len(recs)} hand err R max {mR[1]*100:.1f}cm @{mR[0]}  L max {mL[2]*100:.1f}cm @{mL[0]}')
             bad = [(i, round(a*100,1), round(b*100,1)) for i, a, b in errs if a > 0.012 or b > 0.012]
             if bad: print('     bad frames (f, R cm, L cm):', bad)
             if legerr: print('  !! leg IK misses (f, side, cm):', legerr)
+            for s_, (cst, fi, rp, so) in worst.items():
+                print(f'     arm {s_}: worst cost {cst:.1f} @{fi} pron {rp["pron"]:.0f} wflex {rp["wflex"]:.0f} wdev {rp["wdev"]:.0f} reach {rp["reach"]*100:.1f}cm swivel {so[0]:.0f} roll {math.degrees(so[1][0]):.0f} gripang {math.degrees(so[1][1]):.0f}')
         bones = self.bones
-        # post-process: forearm twist distribution
-        for r in recs:
-            for s in 'rl':
-                Ml, Mh = r[f'lowerarm_{s}'], r[f'hand_{s}']
-                q = (Ml.to_3x3().inverted() @ Mh.to_3x3()).to_quaternion()
-                tw = Quaternion((q.w, 0, q.y, 0)); tw.normalize()
-                ang = 2 * math.atan2(tw.y, tw.w)
-                if ang > math.pi: ang -= 2 * math.pi
-                if ang < -math.pi: ang += 2 * math.pi
-                r[f'lowerarm_{s}'] = Ml @ Matrix.Rotation(ang * twist, 4, 'Y')
         # root motion: root follows the pelvis on the ground plane
         for r in recs:
             p = r['pelvis'].to_translation()

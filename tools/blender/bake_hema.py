@@ -8,12 +8,18 @@ for o in list(bpy.data.objects):
     if o.name in ('Sword',): bpy.data.objects.remove(o)
 print('E_REST', compute_edge(arm))
 build_sword(arm); build_flask(arm)
+import rigtwist
+rigtwist.add_twist_bones(arm)
+rigtwist.reweight(arm, [o for o in bpy.data.objects if o.type == 'MESH' and o.parent == arm])
 au = Author(arm)
+import fixkeys
+if '--nofix' not in sys.argv: fixkeys.fix_shared(au, clips)
 only = [a for a in sys.argv if a.startswith('Hema_')]
 t0 = time.time()
 for fn in clips.ALL:
     name, keys, steps, length, rm = fn()
     if only and name not in only: continue
+    if '--nofix' not in sys.argv: keys = fixkeys.fix_clip(au, name, keys, steps, length); fixkeys.save_cache()
     au.run(name, keys, steps, length, root_motion=rm)
 print('bake time', round(time.time() - t0, 1))
 if not only or 'loco' in sys.argv:

@@ -14,6 +14,7 @@ pb['thumb_01_r'].rotation_euler=(math.radians(ax),math.radians(ay),math.radians(
 pb['thumb_02_r'].rotation_euler=(math.radians(b2),0,0); pb['thumb_03_r'].rotation_euler=(math.radians(b3),0,0)
 bpy.ops.mesh.primitive_cylinder_add(radius=J['R'],depth=0.24,location=(J['gx'],J['gy'],J['gz']),rotation=(math.radians(90),0,0),vertices=24)
 cyl=bpy.context.active_object
+cyl.rotation_euler=(math.radians(90),0,-math.radians(J.get('tilt',0.0)))
 m=bpy.data.materials.new('G'); m.use_nodes=True; m.node_tree.nodes['Principled BSDF'].inputs['Base Color'].default_value=(0.15,0.08,0.04,1); cyl.data.materials.append(m)
 bpy.context.view_layer.update()
 setup_render(420,420,12)

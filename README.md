@@ -14,7 +14,7 @@ Oryginalna gra akcji RPG 3D na Androida (fantasy, wybory moralne, otwarty świat
 - Lisica Iskra — towarzyszka walcząca u twojego boku
 - Automatyczny zapis gry
 
-## Modele 3D i animacje (v1.2–1.3)
+## Modele 3D i animacje (v1.2–1.4)
 **Bohater**
 - Realistyczny model z pełnym szkieletem (66 kości z palcami i kością broni).
 - Fryzura z kart włosów (setki pojedynczych pasm z przezroczystością, kilka warstw), grzywka na oko, ciemnorudy kolor.
@@ -48,6 +48,27 @@ Oryginalna gra akcji RPG 3D na Androida (fantasy, wybory moralne, otwarty świat
 - Po śmierci miecz wypada z dłoni i spada na ziemię.
 
 **Bohater w v1.3**: węższa żuchwa i spiczastszy podbródek, smuklejszy tors, ramiona i szyja, bliżej postaci z rysunku.
+
+## Ręce i ramiona bez zniekształceń (v1.4)
+W v1.3 przy gardzie i ciosach dłonie i przedramiona potrafiły się wykręcać, łokcie rozjeżdżały się na boki, a ręce zapadały się w tors. Pomiary pokazały przedramię skręcone o ~170° (człowiek: ~90°) i nadgarstki zgięte o ponad 150°. Ramiona zbudowano od nowa:
+- **Chwyt jak w prawdziwej dłoni**: rękojeść biegnie ukośnie przez dłoń (16°, od kłykcia palca wskazującego do kłębika); palce na nowo dopasowane numerycznie. Dłoń może się lekko obracać na rękojeści, a miecz zostaje na zaplanowanym torze.
+- **Anatomiczny solver ramion** (`tools/blender/arms.py`): łokieć jest czystym zawiasem. Dla każdej klatki wybierane są położenie łokcia i ułożenie dłoni na rękojeści tak, by:
+  - pronacja przedramienia i zgięcie oraz odchylenie nadgarstka mieściły się w ludzkich zakresach;
+  - łokcie pozostawały nisko;
+  - ręce nie wchodziły w tors, w drugą rękę ani w miecz;
+  - ruch był płynny. Odpowiada za to wspólna optymalizacja Viterbiego po całym ujęciu.
+- **Kości skrętne i pół-staw barku**: przedramię skręca się stopniowo od łokcia do nadgarstka, jak kość promieniowa wokół łokciowej. Kość pomocnicza barku wykonuje połowę obrotu ramienia, więc bark zachowuje kształt nawet z rękami nad głową. Tak samo u bandytów i mieszkańców.
+- **Automatyczna korekta póz** (`tools/blender/fixkeys.py`):
+  - każda kluczowa poza miecza jest przesuwana do najbliższego anatomicznie wykonalnego ułożenia, przede wszystkim przez obrót wokół osi ostrza;
+  - kierunek ostrza i technika zostają zachowane;
+  - w klatkach pośrednich, które wychodzą poza zakres, wstawiane są poprawione pozy.
+- **Kontrola jakości klatka po klatce**: kąty stawów (`qa_arms.py`) i wchodzenie ręki w tors na zdeformowanej siatce (`qa_skin.py`). W gardzie i ciosach przedramię najwyżej dotyka brzucha (≤1,5 cm). Podgląd w prawdziwym silniku gry: `web/tools/inspect`.
+
+Przed (v1.3) i po (v1.4), render z gry:
+![Przed](docs/arms_before.png)
+![Po](docs/arms_after.png)
+![Barki](docs/shoulders_after.png)
+![Chwyt](docs/grip_diagonal.png)
 
 ## Wioska (v1.3)
 Budynki złożone z modułów paczki Medieval Village MegaKit (Quaternius, CC0) zamiast prostych brył:

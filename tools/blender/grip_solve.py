@@ -1,4 +1,5 @@
-# numerically fit the fist around a cylindrical sword grip (radius R) running along the world Y axis in rest pose
+# numerically fit the fist around a cylindrical sword grip (radius R). In the rest pose the grip runs diagonally across
+# the palm (index knuckle -> heel of the hand): its blade end leans TILT degrees toward the fingertips, as in a natural power grip.
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import *
 import json, itertools
@@ -6,6 +7,9 @@ bpy.ops.wm.open_mainfile(filepath=OUT+'hero_stage1.blend')
 arm=bpy.data.objects['Hero']; bones=arm.data.bones
 R=float(sys.argv[-2]) if len(sys.argv)>2 and sys.argv[-1].endswith('.json') else 0.0155
 FT=0.0085       # finger half thickness
+TILT=16.0
+GY0=0.062
+BT=Vector((-math.sin(math.radians(TILT)), -math.cos(math.radians(TILT)), 0.0))
 def rest(n): return bones[n].matrix_local.copy()
 def fk(chain, rots):
     """chain: bone names from hand child to tip; rots: list of Matrix (local basis rotations); returns joint points incl. tip of last"""
@@ -18,7 +22,8 @@ def fk(chain, rots):
     pts.append((last@Matrix.Translation((0,bones[chain[-1]].length,0))).to_translation())
     return pts
 def rx(a): return Matrix.Rotation(math.radians(a),4,'X')
-def dist_axis(p,g): return math.hypot(p.x-g[0], p.z-g[1])
+def dist_axis(p,g):
+    d=p-Vector((g[0],GY0,g[1])); return (d-BT*d.dot(BT)).length
 def seg_cost(pts,g,target):
     c=0
     for i in range(len(pts)-1):
@@ -51,8 +56,9 @@ print('BEST', best)
 tot,gx,gz,sol=best
 # thumb: wrap around the +X side and under the grip, tip resting on the index finger
 tchain=['thumb_01_r','thumb_02_r','thumb_03_r','thumb_04_leaf_r']
-gy_center=0.062
-tgt=Vector((gx-0.004, 0.028, gz-R-0.012))
+gy_center=GY0
+ax_pt=Vector((gx,GY0,gz))+BT*((GY0-0.028)/math.cos(math.radians(TILT)))
+tgt=ax_pt+Vector((-0.004, 0.0, -R-0.012))
 tb=None
 for ax in range(-60,61,10):
     for az in range(-60,61,10):
@@ -67,4 +73,4 @@ for ax in range(-60,61,10):
                         if d<R+0.008: c+=(R+0.008-d)**2*400
                     if tb is None or c<tb[0]: tb=(c,(ax,ay,az,b2,b3),pts[-1])
 print('THUMB', tb)
-json.dump({'gx':gx,'gz':gz,'gy':gy_center,'R':R,'fingers':sol,'thumb':tb[1]}, open(OUT+(sys.argv[-1] if sys.argv[-1].endswith('.json') else 'grip.json'),'w'), indent=1)
+json.dump({'gx':gx,'gz':gz,'gy':gy_center,'R':R,'tilt':TILT,'fingers':sol,'thumb':tb[1]}, open(OUT+(sys.argv[-1] if sys.argv[-1].endswith('.json') else 'grip.json'),'w'), indent=1)

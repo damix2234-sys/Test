@@ -91,18 +91,9 @@ def bake_loco(au, name, act, mode, fps_src=None):
         Ref = Matrix.Identity(3) - 2 * Matrix((s_n * s_n.x, s_n * s_n.y, s_n * s_n.z))
         HLrot = Ref @ HR.to_3x3() @ au.K
         HL = HLrot.to_4x4(); HL.translation = G + Ref @ (HR.translation - G) - b * LH_OFF
-        # elbow poles in the chest frame
-        chest = S3.to_3x3()
-        fwd = (chest @ Vector((0, 0, 1))).normalized(); fwd.z = 0; fwd.normalize()
-        for s_, Ht, PT in (('r', HR, au.PR), ('l', HL, au.PL)):
-            S0 = (A @ pb[f'upperarm_{s_}'].matrix).to_translation(); wr = Ht.translation
-            out = Vector((-fwd.y, fwd.x, 0)) * (1 if s_ == 'r' else -1) * -1
-            hint = out * 0.5 + Vector((0, 0, -1)) * 0.85 + fwd * 0.1
-            PT.location = (S0 + wr) * 0.5 + hint.normalized() * 0.45
-        au.TR.matrix_world = HR; au.TL.matrix_world = HL
-        bpy.context.view_layer.update()
-        au.declash(W)
-        au.cur = dict(HR=HR, HL=HL, W=W)
+        au.cur = dict(HR=HR, HL=HL, W=W, lfree=0.0)
+    au.active_arms = ('r', 'l') if mode == 'guard' else ('r',)
     res = au.bake_cb(name, n + 1, cb, root_motion=False, check_left=(mode == 'guard'))
+    au.active_arms = ('r', 'l')
     au.mute('legs', False); au.mute('look', False); au.mute('larm', False)
     return res
